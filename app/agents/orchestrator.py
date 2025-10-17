@@ -2,23 +2,34 @@
 from typing import List
 from datetime import date
 from itertools import product
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
+import json
 from .hotel_agent import HotelAgent
 from .attractions_agent import AttractionsAgent
 from .restaurant_agent import RestaurantAgent
-from ..schemas.response import Itinerary
+from ..schemas.response import Itinerary, Hotel, Attraction, Restaurant
 from ..schemas.agent import BudgetAllocation
+from ..config import settings
+from ..utils.content_safety import check_content_safety, configure_safety_settings
 
 
 class OrchestratorAgent:
     """
     Orchestrator agent that coordinates Hotel, Attractions, and Restaurant agents
-    to create complete travel itineraries
+    to create complete travel itineraries using LLM-based intelligent planning
     """
 
     def __init__(self):
         self.hotel_agent = HotelAgent()
         self.attractions_agent = AttractionsAgent()
         self.restaurant_agent = RestaurantAgent()
+        self.llm = ChatGoogleGenerativeAI(
+            model=settings.model_name,
+            temperature=0.7,
+            google_api_key=settings.gemini_api_key,
+            safety_settings=configure_safety_settings()
+        )
 
     async def close(self):
         """Close all sub-agents"""
@@ -133,80 +144,18 @@ class OrchestratorAgent:
         except Exception as e:
             raise Exception(f"Restaurant search failed: {str(e)}. Please increase your budget.")
 
-        # Create itinerary combinations
-        print(f"\n🎯 Creating itinerary combinations...")
-        itineraries = []
-
-        # We have 3 hotels, 3 attractions, 3 restaurants
-        # Create 3 diverse combinations
-        combinations = [
-            (0, 0, 0),  # Cheapest options
-            (1, 1, 1),  # Mid-range options
-            (2, 2, 2),  # Premium options
-        ]
-
-        for hotel_idx, attr_idx, rest_idx in combinations:
-            # Safety check for indices
-            if (hotel_idx >= len(hotel_output.options) or
-                attr_idx >= len(attractions_output.options) or
-                rest_idx >= len(restaurant_output.options)):
-                continue
-
-            hotel = hotel_output.options[hotel_idx]
-            attractions = [attractions_output.options[attr_idx]]
-            restaurants = [restaurant_output.options[rest_idx]]
-
-            # Calculate total cost
-            total_cost = (
-                hotel.total_price +
-                sum(a.price for a in attractions) +
-                (sum(r.estimated_cost_per_meal for r in restaurants) * trip_duration_days * 3)  # 3 meals/day
-            )
-
-            # Check if within budget
-            if total_cost <= budget:
-                remaining = budget - total_cost
-
-                itineraries.append(Itinerary(
-                    hotel=hotel,
-                    attractions=attractions,
-                    restaurants=restaurants,
-                    total_cost=total_cost,
-                    remaining_budget=remaining
-                ))
-
-        # If no combinations fit, try cheaper options
-        if not itineraries:
-            # Try to find at least one combination that fits
-            for h_idx in range(len(hotel_output.options)):
-                for a_idx in range(len(attractions_output.options)):
-                    for r_idx in range(len(restaurant_output.options)):
-                        hotel = hotel_output.options[h_idx]
-                        attractions = [attractions_output.options[a_idx]]
-                        restaurants = [restaurant_output.options[r_idx]]
-
-                        total_cost = (
-                            hotel.total_price +
-                            sum(a.price for a in attractions) +
-                            (sum(r.estimated_cost_per_meal for r in restaurants) * trip_duration_days * 3)
-                        )
-
-                        if total_cost <= budget:
-                            remaining = budget - total_cost
-                            itineraries.append(Itinerary(
-                                hotel=hotel,
-                                attractions=attractions,
-                                restaurants=restaurants,
-                                total_cost=total_cost,
-                                remaining_budget=remaining
-                            ))
-
-                            if len(itineraries) >= 3:
-                                break
-                    if len(itineraries) >= 3:
-                        break
-                if len(itineraries) >= 3:
-                    break
+        # Use LLM to create intelligent itinerary combinations
+        print(f"\n🎯 Creating intelligent itinerary combinations...")
+        itineraries = await self._create_intelligent_itineraries(
+            city=city,
+            budget=budget,
+            start_date=start_date,
+            end_date=end_date,
+            trip_duration_days=trip_duration_days,
+            hotels=hotel_output.options,
+            attractions=attractions_output.options,
+            restaurants=restaurant_output.options
+        )
 
         if not itineraries:
             raise Exception(
@@ -215,3 +164,202 @@ class OrchestratorAgent:
 
         print(f"\n✅ Generated {len(itineraries)} itinerary options")
         return itineraries[:3]  # Return max 3
+
+    def _format_options_for_llm(
+        self,
+        hotels: List[Hotel],
+        attractions: List[Attraction],
+        restaurants: List[Restaurant]
+    ) -> str:
+        """Format all options into structured text for LLM"""
+        parts = ["# Available Options\n\n"]
+
+        # Hotels
+        parts.append("## Hotels:\n")
+        for i, hotel in enumerate(hotels):
+            parts.append(
+                f"{i}. {hotel.name} - ${hotel.price_per_night:.2f}/night "
+                f"(Total: ${hotel.total_price:.2f}) - Rating: {hotel.rating or 'N/A'}\n"
+            )
+
+        # Attractions
+        parts.append("\n## Attractions:\n")
+        for i, attr in enumerate(attractions):
+            parts.append(
+                f"{i}. {attr.name} - ${attr.price:.2f} - "
+                f"Rating: {attr.rating or 'N/A'} - Category: {attr.category or 'N/A'}\n"
+            )
+
+        # Restaurants
+        parts.append("\n## Restaurants:\n")
+        for i, rest in enumerate(restaurants):
+            parts.append(
+                f"{i}. {rest.name} - ${rest.estimated_cost_per_meal:.2f}/meal - "
+                f"Cuisine: {rest.cuisine or 'N/A'} - Rating: {rest.rating or 'N/A'}\n"
+            )
+
+        return "".join(parts)
+
+    async def _create_intelligent_itineraries(
+        self,
+        city: str,
+        budget: float,
+        start_date: date,
+        end_date: date,
+        trip_duration_days: int,
+        hotels: List[Hotel],
+        attractions: List[Attraction],
+        restaurants: List[Restaurant]
+    ) -> List[Itinerary]:
+        """Use LLM to create intelligent itinerary combinations"""
+
+        options_text = self._format_options_for_llm(hotels, attractions, restaurants)
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", """You are an expert travel planner creating personalized itineraries.
+
+Analyze the available options and create 3 DIFFERENT itinerary recommendations.
+
+RULES:
+1. Each itinerary has EXACTLY 1 hotel (for all nights)
+2. Each itinerary can have MULTIPLE attractions (select 1-3 based on budget/time)
+3. Each itinerary should have 2-3 different restaurants (used across meals)
+4. Total cost must be ≤ ${budget}
+5. Create 3 styles: Budget-friendly, Balanced, Premium
+
+Calculate costs:
+- Hotel total = shown total price
+- Attractions total = sum of selected attraction prices
+- Restaurants total = (avg meal cost × 3 meals/day × {days} days)
+
+Return JSON array with 3 objects:
+[
+  {{
+    "style": "budget-friendly",
+    "hotel_index": 0,
+    "attraction_indices": [0, 1],
+    "restaurant_indices": [0, 1],
+    "reasoning": "Why this combination"
+  }},
+  ...
+]
+
+ONLY return valid JSON, no other text."""),
+            ("human", """Create 3 itineraries for {city} from {start_date} to {end_date}.
+Budget: ${budget}
+Duration: {days} days
+
+{options}""")
+        ])
+
+        try:
+            chain = prompt | self.llm
+            response = await chain.ainvoke({
+                "city": city,
+                "budget": budget,
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "days": trip_duration_days,
+                "options": options_text
+            })
+
+            # Content safety check
+            check_content_safety(response)
+
+            # Parse JSON response
+            response_text = response.content if hasattr(response, 'content') else str(response)
+            start_idx = response_text.find('[')
+            end_idx = response_text.rfind(']') + 1
+
+            if start_idx == -1 or end_idx == 0:
+                raise ValueError("No JSON found in response")
+
+            json_text = response_text[start_idx:end_idx]
+            plans = json.loads(json_text)
+
+            # Convert to Itinerary objects
+            itineraries = []
+            for plan in plans[:3]:
+                hotel_idx = plan.get("hotel_index", 0)
+                if hotel_idx >= len(hotels):
+                    continue
+
+                hotel = hotels[hotel_idx]
+
+                # Get selected attractions
+                attr_indices = plan.get("attraction_indices", [])
+                selected_attractions = [attractions[i] for i in attr_indices if i < len(attractions)]
+
+                # Get selected restaurants
+                rest_indices = plan.get("restaurant_indices", [])
+                selected_restaurants = [restaurants[i] for i in rest_indices if i < len(restaurants)]
+
+                if not selected_restaurants:
+                    selected_restaurants = restaurants[:2]
+
+                # Calculate total cost
+                total_cost = (
+                    hotel.total_price +
+                    sum(a.price for a in selected_attractions) +
+                    (sum(r.estimated_cost_per_meal for r in selected_restaurants) / len(selected_restaurants)) * 3 * trip_duration_days
+                )
+
+                if total_cost <= budget:
+                    itineraries.append(Itinerary(
+                        hotel=hotel,
+                        attractions=selected_attractions,
+                        restaurants=selected_restaurants,
+                        total_cost=total_cost,
+                        remaining_budget=budget - total_cost
+                    ))
+
+            return itineraries
+
+        except Exception as e:
+            print(f"⚠️ LLM planning failed: {e}. Using fallback logic.")
+            return self._create_fallback_itineraries(budget, trip_duration_days, hotels, attractions, restaurants)
+
+    def _create_fallback_itineraries(
+        self,
+        budget: float,
+        days: int,
+        hotels: List[Hotel],
+        attractions: List[Attraction],
+        restaurants: List[Restaurant]
+    ) -> List[Itinerary]:
+        """Fallback: Simple combination logic if LLM fails"""
+        itineraries = []
+
+        for h_idx in range(min(3, len(hotels))):
+            hotel = hotels[h_idx]
+            remaining = budget - hotel.total_price
+
+            # Select attractions
+            selected_attractions = []
+            for attr in attractions:
+                if sum(a.price for a in selected_attractions) + attr.price <= remaining * 0.3:
+                    selected_attractions.append(attr)
+                    if len(selected_attractions) >= 2:
+                        break
+
+            selected_restaurants = restaurants[:2] if len(restaurants) >= 2 else restaurants
+
+            total_cost = (
+                hotel.total_price +
+                sum(a.price for a in selected_attractions) +
+                (sum(r.estimated_cost_per_meal for r in selected_restaurants) / len(selected_restaurants)) * 3 * days
+            )
+
+            if total_cost <= budget:
+                itineraries.append(Itinerary(
+                    hotel=hotel,
+                    attractions=selected_attractions,
+                    restaurants=selected_restaurants,
+                    total_cost=total_cost,
+                    remaining_budget=budget - total_cost
+                ))
+
+            if len(itineraries) >= 3:
+                break
+
+        return itineraries

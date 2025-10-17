@@ -96,9 +96,16 @@ class XoteloAPI:
                     if rates_data.get("error"):
                         continue  # Skip hotels with rate errors
 
-                    # Extract price from rates response
+                    # Extract price from rates response (get lowest rate)
                     rates_result = rates_data.get("result", {})
-                    price_per_night = rates_result.get("price", 0)
+                    rates_list = rates_result.get("rates", [])
+
+                    if not rates_list:
+                        continue  # Skip if no rates available
+
+                    # Find the lowest rate from all booking sites
+                    lowest_rate = min(rates_list, key=lambda x: x.get("rate", float('inf')))
+                    price_per_night = lowest_rate.get("rate", 0)
 
                     # Filter by budget
                     if price_per_night > 0 and price_per_night <= max_price_per_night:
