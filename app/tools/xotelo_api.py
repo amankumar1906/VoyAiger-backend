@@ -33,7 +33,9 @@ class XoteloAPI:
         limit: int = 10
     ) -> List[Dict]:
         """
-        Search for hotels in a city using Xotelo /search endpoint
+        Search for hotels in a city using 2-step process:
+        1. /search to find hotels by city
+        2. /rates to get prices for each hotel
 
         Args:
             city_name: Name of the city
@@ -43,56 +45,84 @@ class XoteloAPI:
             limit: Maximum number of results
 
         Returns:
-            List of hotel dictionaries
+            List of hotel dictionaries with pricing
         """
-        url = f"{self.BASE_URL}/api/search"
-
-        # Calculate nights
-        nights = (check_out - check_in).days
-        max_price_per_night = budget / nights if nights > 0 else budget
-
-        # Xotelo /api/search endpoint parameters (based on RapidAPI docs)
-        params = {
-            "location": city_name,
-            "location_type": "accommodation",
-            "chk_in": check_in.strftime("%Y-%m-%d"),
-            "chk_out": check_out.strftime("%Y-%m-%d")
+        # Step 1: Search for hotels in the city
+        search_url = f"{self.BASE_URL}/api/search"
+        search_params = {
+            "query": city_name,
+            "location_type": "accommodation"
         }
 
         try:
-            response = await self.client.get(url, params=params)
-            response.raise_for_status()
-            data = response.json()
+            # Get hotel list
+            search_response = await self.client.get(search_url, params=search_params)
+            search_response.raise_for_status()
+            search_data = search_response.json()
+
+            if search_data.get("error"):
+                raise Exception(f"Search error: {search_data['error']}")
+
+            hotels_list = search_data.get("result", {}).get("list", [])
+
+            if not hotels_list:
+                return []
+
+            # Calculate nights and max price
+            nights = (check_out - check_in).days
+            max_price_per_night = budget / nights if nights > 0 else budget
 
             results = []
-            # Parse Xotelo response format
-            hotels_data = data if isinstance(data, list) else data.get("result", [])
 
-            for hotel in hotels_data[:limit * 2]:  # Get more to filter by budget
-                # Extract price (Xotelo returns price per night)
-                price_per_night = hotel.get("price", 0)
-                if isinstance(price_per_night, dict):
-                    price_per_night = price_per_night.get("amount", 0)
+            # Step 2: Get rates for each hotel (up to limit)
+            for hotel in hotels_list[:limit * 2]:  # Fetch more to filter by budget
+                hotel_key = hotel.get("hotel_key")
+                if not hotel_key:
+                    continue
 
-                # Filter by budget
-                if price_per_night > 0 and price_per_night <= max_price_per_night:
-                    results.append({
-                        "hotel_id": hotel.get("hotel_key", hotel.get("id")),
-                        "name": hotel.get("name", "Unknown Hotel"),
-                        "address": hotel.get("address", f"{city_name}"),
-                        "price_per_night": float(price_per_night),
-                        "total_price": float(price_per_night) * nights,
-                        "rating": hotel.get("rating", hotel.get("stars")),
-                        "amenities": hotel.get("amenities", []),
-                        "stars": hotel.get("stars"),
-                        "image_url": hotel.get("image", hotel.get("image_url")),
-                        "nights": nights
-                    })
+                # Get rates for this hotel
+                rates_url = f"{self.BASE_URL}/api/rates"
+                rates_params = {
+                    "hotel_key": hotel_key,
+                    "chk_in": check_in.strftime("%Y-%m-%d"),
+                    "chk_out": check_out.strftime("%Y-%m-%d")
+                }
 
-                if len(results) >= limit:
-                    break
+                try:
+                    rates_response = await self.client.get(rates_url, params=rates_params)
+                    rates_response.raise_for_status()
+                    rates_data = rates_response.json()
+
+                    if rates_data.get("error"):
+                        continue  # Skip hotels with rate errors
+
+                    # Extract price from rates response
+                    rates_result = rates_data.get("result", {})
+                    price_per_night = rates_result.get("price", 0)
+
+                    # Filter by budget
+                    if price_per_night > 0 and price_per_night <= max_price_per_night:
+                        results.append({
+                            "hotel_id": hotel_key,
+                            "name": hotel.get("name", "Unknown Hotel"),
+                            "address": hotel.get("street_address", hotel.get("short_place_name", city_name)),
+                            "price_per_night": float(price_per_night),
+                            "total_price": float(price_per_night) * nights,
+                            "rating": None,  # Not provided by search endpoint
+                            "amenities": [],
+                            "stars": None,
+                            "image_url": hotel.get("image"),
+                            "nights": nights
+                        })
+
+                    if len(results) >= limit:
+                        break
+
+                except Exception:
+                    continue  # Skip hotels that fail rate lookup
 
             return results
+
         except httpx.HTTPStatusError as e:
             raise Exception(f"Xotelo API error: {e.response.status_code} - {e.response.text}")
         except Exception as e:
