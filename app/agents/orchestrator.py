@@ -9,9 +9,10 @@ from .hotel_agent import HotelAgent
 from .attractions_agent import AttractionsAgent
 from .restaurant_agent import RestaurantAgent
 from ..schemas.response import Itinerary, Hotel, Attraction, Restaurant
-from ..schemas.agent import BudgetAllocation
+from ..schemas.agent import BudgetAllocation, ItineraryPlan
 from ..config import settings
 from ..utils.content_safety import check_content_safety, configure_safety_settings
+from pydantic import ValidationError
 
 
 class OrchestratorAgent:
@@ -275,24 +276,35 @@ Duration: {days} days
                 raise ValueError("No JSON found in response")
 
             json_text = response_text[start_idx:end_idx]
-            plans = json.loads(json_text)
+            raw_plans = json.loads(json_text)
+
+            # Validate with Pydantic
+            validated_plans = []
+            for raw_plan in raw_plans[:3]:
+                try:
+                    validated_plan = ItineraryPlan(**raw_plan)
+                    validated_plans.append(validated_plan)
+                except ValidationError as e:
+                    print(f"⚠️ Plan validation failed: {e}. Skipping this plan.")
+                    continue
+
+            if not validated_plans:
+                raise ValueError("No valid plans after Pydantic validation")
 
             # Convert to Itinerary objects
             itineraries = []
-            for plan in plans[:3]:
-                hotel_idx = plan.get("hotel_index", 0)
+            for plan in validated_plans:
+                hotel_idx = plan.hotel_index
                 if hotel_idx >= len(hotels):
                     continue
 
                 hotel = hotels[hotel_idx]
 
                 # Get selected attractions
-                attr_indices = plan.get("attraction_indices", [])
-                selected_attractions = [attractions[i] for i in attr_indices if i < len(attractions)]
+                selected_attractions = [attractions[i] for i in plan.attraction_indices if i < len(attractions)]
 
                 # Get selected restaurants
-                rest_indices = plan.get("restaurant_indices", [])
-                selected_restaurants = [restaurants[i] for i in rest_indices if i < len(restaurants)]
+                selected_restaurants = [restaurants[i] for i in plan.restaurant_indices if i < len(restaurants)]
 
                 if not selected_restaurants:
                     selected_restaurants = restaurants[:2]

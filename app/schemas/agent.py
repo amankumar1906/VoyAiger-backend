@@ -28,3 +28,17 @@ class BudgetAllocation(BaseModel):
     attractions_budget: float = Field(..., description="Budget for attractions")
     restaurants_budget: float = Field(..., description="Budget for restaurants")
     contingency: float = Field(..., description="Remaining contingency budget")
+
+
+class ItineraryPlan(BaseModel):
+    """Schema for orchestrator LLM output - single itinerary plan"""
+    style: str = Field(..., description="Itinerary style (budget-friendly, balanced, premium)")
+    hotel_index: int = Field(..., ge=0, description="Index of selected hotel")
+    attraction_indices: List[int] = Field(..., description="Indices of selected attractions")
+    restaurant_indices: List[int] = Field(..., description="Indices of selected restaurants")
+    reasoning: str = Field(..., description="Reasoning for this itinerary choice")
+
+
+class OrchestratorLLMOutput(BaseModel):
+    """Schema for orchestrator LLM output - array of itinerary plans"""
+    itineraries: List[ItineraryPlan] = Field(..., max_length=3, description="Up to 3 itinerary plans")
