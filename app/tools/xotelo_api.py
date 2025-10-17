@@ -1,4 +1,4 @@
-"""Xotelo API wrapper for hotel searches"""
+"""Xotelo API wrapper for hotel searches via RapidAPI"""
 import httpx
 from typing import List, Dict
 from datetime import date
@@ -6,13 +6,19 @@ from ..config import settings
 
 
 class XoteloAPI:
-    """Wrapper for Xotelo Hotel API"""
+    """Wrapper for Xotelo Hotel API via RapidAPI"""
 
-    BASE_URL = "https://api.xotelo.com/api/v2"
+    BASE_URL = "https://xotelo-hotel-prices.p.rapidapi.com"
 
     def __init__(self):
-        self.api_key = settings.xotelo_api_key
-        self.client = httpx.AsyncClient(timeout=30.0)
+        self.api_key = settings.xotelo_api_key  # This is your RapidAPI key
+        self.client = httpx.AsyncClient(
+            timeout=30.0,
+            headers={
+                "X-RapidAPI-Key": self.api_key,
+                "X-RapidAPI-Host": "xotelo-hotel-prices.p.rapidapi.com"
+            }
+        )
 
     async def close(self):
         """Close the HTTP client"""
@@ -27,7 +33,7 @@ class XoteloAPI:
         limit: int = 10
     ) -> List[Dict]:
         """
-        Search for hotels in a city
+        Search for hotels in a city using Xotelo /search endpoint
 
         Args:
             city_name: Name of the city
@@ -39,19 +45,18 @@ class XoteloAPI:
         Returns:
             List of hotel dictionaries
         """
-        url = f"{self.BASE_URL}/hotels/search"
+        url = f"{self.BASE_URL}/api/search"
 
         # Calculate nights
         nights = (check_out - check_in).days
         max_price_per_night = budget / nights if nights > 0 else budget
 
+        # Xotelo /api/search endpoint parameters (based on RapidAPI docs)
         params = {
-            "api_key": self.api_key,
             "location": city_name,
-            "checkin": check_in.isoformat(),
-            "checkout": check_out.isoformat(),
-            "limit": limit,
-            "currency": "USD"
+            "location_type": "accommodation",
+            "chk_in": check_in.strftime("%Y-%m-%d"),
+            "chk_out": check_out.strftime("%Y-%m-%d")
         }
 
         try:
@@ -60,25 +65,34 @@ class XoteloAPI:
             data = response.json()
 
             results = []
-            for hotel in data.get("hotels", []):
-                price_per_night = hotel.get("price", {}).get("amount", 0)
+            # Parse Xotelo response format
+            hotels_data = data if isinstance(data, list) else data.get("result", [])
+
+            for hotel in hotels_data[:limit * 2]:  # Get more to filter by budget
+                # Extract price (Xotelo returns price per night)
+                price_per_night = hotel.get("price", 0)
+                if isinstance(price_per_night, dict):
+                    price_per_night = price_per_night.get("amount", 0)
 
                 # Filter by budget
-                if price_per_night <= max_price_per_night:
+                if price_per_night > 0 and price_per_night <= max_price_per_night:
                     results.append({
-                        "hotel_id": hotel.get("id"),
-                        "name": hotel.get("name"),
-                        "address": hotel.get("address", ""),
-                        "price_per_night": price_per_night,
-                        "total_price": price_per_night * nights,
-                        "rating": hotel.get("rating"),
+                        "hotel_id": hotel.get("hotel_key", hotel.get("id")),
+                        "name": hotel.get("name", "Unknown Hotel"),
+                        "address": hotel.get("address", f"{city_name}"),
+                        "price_per_night": float(price_per_night),
+                        "total_price": float(price_per_night) * nights,
+                        "rating": hotel.get("rating", hotel.get("stars")),
                         "amenities": hotel.get("amenities", []),
                         "stars": hotel.get("stars"),
-                        "image_url": hotel.get("image_url"),
+                        "image_url": hotel.get("image", hotel.get("image_url")),
                         "nights": nights
                     })
 
-            return results[:limit]
+                if len(results) >= limit:
+                    break
+
+            return results
         except httpx.HTTPStatusError as e:
             raise Exception(f"Xotelo API error: {e.response.status_code} - {e.response.text}")
         except Exception as e:
