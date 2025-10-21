@@ -1,17 +1,18 @@
-"""Google Places API wrapper for attractions and restaurants"""
+"""Google Places API wrapper for attractions and restaurants (New API)"""
 import httpx
 from typing import List, Dict, Optional
 from ..config import settings
 
 
 class GooglePlacesAPI:
-    """Wrapper for Google Places API"""
+    """Wrapper for Google Places API (New)"""
 
-    BASE_URL = "https://maps.googleapis.com/maps/api/place"
+    BASE_URL = "https://places.googleapis.com/v1"
 
     def __init__(self):
         self.api_key = settings.google_places_api_key
         self.client = httpx.AsyncClient(timeout=30.0)
+        self._city_cache = {}  # Cache city lookups to avoid repeated API calls
 
     async def close(self):
         """Close the HTTP client"""
@@ -19,7 +20,9 @@ class GooglePlacesAPI:
 
     async def search_city(self, city_name: str) -> Optional[Dict]:
         """
-        Validate and get city information
+        Validate and get city information using Text Search (New)
+
+        Uses caching to avoid repeated API calls for the same city
 
         Args:
             city_name: Name of the city
@@ -27,74 +30,107 @@ class GooglePlacesAPI:
         Returns:
             City information dict or None if not found
         """
-        url = f"{self.BASE_URL}/findplacefromtext/json"
-        params = {
-            "input": city_name,
-            "inputtype": "textquery",
-            "fields": "place_id,name,formatted_address,geometry",
-            "key": self.api_key
+        # Check cache first
+        if city_name in self._city_cache:
+            return self._city_cache[city_name]
+
+        url = f"{self.BASE_URL}/places:searchText"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": self.api_key,
+            "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location"
+        }
+        body = {
+            "textQuery": city_name
         }
 
         try:
-            response = await self.client.get(url, params=params)
+            response = await self.client.post(url, json=body, headers=headers)
             response.raise_for_status()
             data = response.json()
 
-            if data.get("status") == "OK" and data.get("candidates"):
-                return data["candidates"][0]
+            if data.get("places") and len(data["places"]) > 0:
+                place = data["places"][0]
+                city_info = {
+                    "place_id": place.get("id"),
+                    "name": place.get("displayName", {}).get("text", city_name),
+                    "formatted_address": place.get("formattedAddress"),
+                    "location": place.get("location")
+                }
+                # Cache the result
+                self._city_cache[city_name] = city_info
+                return city_info
             return None
         except Exception as e:
             raise Exception(f"Failed to validate city: {str(e)}")
 
-    async def search_attractions(
+    async def search_attractions_by_types(
         self,
-        city_name: str,
-        budget: float,
+        latitude: float,
+        longitude: float,
+        types: List[str],
         limit: int = 10
     ) -> List[Dict]:
         """
-        Search for tourist attractions in a city
+        Search for attractions by dynamic types using Nearby Search (New)
 
         Args:
-            city_name: Name of the city
-            budget: Budget allocated for attractions
+            latitude: City latitude coordinate
+            longitude: City longitude coordinate
+            types: List of place types to search for (e.g., ["beach", "night_club", "tourist_attraction"])
             limit: Maximum number of results
 
         Returns:
-            List of attraction dictionaries
+            List of attraction dictionaries with price_level
         """
-        # First get city location
-        city_info = await self.search_city(city_name)
-        if not city_info:
-            raise Exception(f"City '{city_name}' not found")
+        lat, lng = latitude, longitude
 
-        location = city_info["geometry"]["location"]
-        lat, lng = location["lat"], location["lng"]
-
-        # Search for tourist attractions
-        url = f"{self.BASE_URL}/nearbysearch/json"
-        params = {
-            "location": f"{lat},{lng}",
-            "radius": 10000,  # 10km radius
-            "type": "tourist_attraction",
-            "key": self.api_key
+        # Search for tourist attractions using new API
+        url = f"{self.BASE_URL}/places:searchNearby"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": self.api_key,
+            "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.rating,places.priceLevel,places.types"
+        }
+        body = {
+            "includedTypes": types,  # Dynamic types from LLM
+            "maxResultCount": min(limit, 20),  # API limit is 20
+            "locationRestriction": {
+                "circle": {
+                    "center": {
+                        "latitude": lat,
+                        "longitude": lng
+                    },
+                    "radius": 10000.0  # 10km radius
+                }
+            }
         }
 
         try:
-            response = await self.client.get(url, params=params)
+            response = await self.client.post(url, json=body, headers=headers)
             response.raise_for_status()
             data = response.json()
 
             results = []
-            if data.get("status") == "OK":
-                for place in data.get("results", [])[:limit]:
+            if data.get("places"):
+                for place in data["places"][:limit]:
+                    # Map price_level enum to integer (0-4)
+                    price_level_map = {
+                        "PRICE_LEVEL_FREE": 0,
+                        "PRICE_LEVEL_INEXPENSIVE": 1,
+                        "PRICE_LEVEL_MODERATE": 2,
+                        "PRICE_LEVEL_EXPENSIVE": 3,
+                        "PRICE_LEVEL_VERY_EXPENSIVE": 4
+                    }
+                    price_level = price_level_map.get(place.get("priceLevel"), None)
+
                     results.append({
-                        "place_id": place.get("place_id"),
-                        "name": place.get("name"),
-                        "address": place.get("vicinity", ""),
+                        "place_id": place.get("id"),
+                        "name": place.get("displayName", {}).get("text", "Unknown"),
+                        "address": place.get("formattedAddress", ""),
                         "rating": place.get("rating"),
-                        "types": place.get("types", []),
-                        "location": place.get("geometry", {}).get("location")
+                        "price_level": price_level,
+                        "types": place.get("types", [])
                     })
 
             return results
@@ -103,59 +139,71 @@ class GooglePlacesAPI:
 
     async def search_restaurants(
         self,
-        city_name: str,
+        latitude: float,
+        longitude: float,
         budget: float,
         limit: int = 10
     ) -> List[Dict]:
         """
-        Search for restaurants in a city
+        Search for restaurants using Nearby Search (New)
 
         Args:
-            city_name: Name of the city
-            budget: Budget allocated for restaurants
+            latitude: City latitude coordinate
+            longitude: City longitude coordinate
+            budget: Budget allocated for restaurants (not used with price_level)
             limit: Maximum number of results
 
         Returns:
-            List of restaurant dictionaries
+            List of restaurant dictionaries with price_level
         """
-        # First get city location
-        city_info = await self.search_city(city_name)
-        if not city_info:
-            raise Exception(f"City '{city_name}' not found")
+        lat, lng = latitude, longitude
 
-        location = city_info["geometry"]["location"]
-        lat, lng = location["lat"], location["lng"]
-
-        # Search for restaurants
-        url = f"{self.BASE_URL}/nearbysearch/json"
-        params = {
-            "location": f"{lat},{lng}",
-            "radius": 5000,  # 5km radius
-            "type": "restaurant",
-            "key": self.api_key
+        # Search for restaurants using new API
+        url = f"{self.BASE_URL}/places:searchNearby"
+        headers = {
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": self.api_key,
+            "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.rating,places.priceLevel,places.types"
+        }
+        body = {
+            "includedTypes": ["restaurant"],
+            "maxResultCount": min(limit, 20),  # API limit is 20
+            "locationRestriction": {
+                "circle": {
+                    "center": {
+                        "latitude": lat,
+                        "longitude": lng
+                    },
+                    "radius": 5000.0  # 5km radius
+                }
+            }
         }
 
         try:
-            response = await self.client.get(url, params=params)
+            response = await self.client.post(url, json=body, headers=headers)
             response.raise_for_status()
             data = response.json()
 
             results = []
-            if data.get("status") == "OK":
-                for place in data.get("results", [])[:limit]:
-                    # Estimate price level (1-4 from Google, convert to USD estimate)
-                    price_level = place.get("price_level", 2)
-                    estimated_cost = price_level * 25  # Rough estimate: $25 per level
+            if data.get("places"):
+                for place in data["places"][:limit]:
+                    # Map price_level enum to integer (0-4)
+                    price_level_map = {
+                        "PRICE_LEVEL_FREE": 0,
+                        "PRICE_LEVEL_INEXPENSIVE": 1,
+                        "PRICE_LEVEL_MODERATE": 2,
+                        "PRICE_LEVEL_EXPENSIVE": 3,
+                        "PRICE_LEVEL_VERY_EXPENSIVE": 4
+                    }
+                    price_level = price_level_map.get(place.get("priceLevel"), None)
 
                     results.append({
-                        "place_id": place.get("place_id"),
-                        "name": place.get("name"),
-                        "address": place.get("vicinity", ""),
+                        "place_id": place.get("id"),
+                        "name": place.get("displayName", {}).get("text", "Unknown"),
+                        "address": place.get("formattedAddress", ""),
                         "rating": place.get("rating"),
                         "price_level": price_level,
-                        "estimated_cost_per_meal": estimated_cost,
-                        "types": place.get("types", []),
-                        "location": place.get("geometry", {}).get("location")
+                        "types": place.get("types", [])
                     })
 
             return results

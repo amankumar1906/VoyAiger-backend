@@ -1,44 +1,80 @@
-"""Agent-specific schemas for internal use"""
-from typing import List
-from pydantic import BaseModel, Field
-from .response import Hotel, Attraction, Restaurant
+"""Agent-specific schemas for internal use and LLM output validation"""
+from typing import List, Optional
+from pydantic import BaseModel, Field, field_validator
+from .response import DayActivity, OptionalActivity
 
 
-class HotelAgentOutput(BaseModel):
-    """Output schema for Hotel Agent"""
-    options: List[Hotel] = Field(..., max_length=3, description="Up to 3 hotel options")
-    total_allocated_budget: float = Field(..., description="Budget allocated for hotels")
+class DaySchedule(BaseModel):
+    """Daily schedule from LLM - with weather integration"""
+    model_config = {"extra": "forbid"}
+
+    day_number: int = Field(..., ge=1, description="Day number (1, 2, 3, etc.)")
+    date: str = Field(..., description="Date in YYYY-MM-DD format")
+    weather: Optional[str] = Field(None, description="Weather for this day (e.g., 'Sunny, 75°F')")
+    activities: List[DayActivity] = Field(default_factory=list, description="Scheduled activities for this day")
+
+    @field_validator("activities")
+    @classmethod
+    def validate_activities_not_empty(cls, v):
+        """Ensure at least one activity per day"""
+        # Allow empty for flexibility days or travel days
+        # if not v or len(v) == 0:
+        #     raise ValueError("Each day must have at least one activity")
+        return v
 
 
-class AttractionsAgentOutput(BaseModel):
-    """Output schema for Attractions Agent"""
-    options: List[Attraction] = Field(..., max_length=3, description="Up to 3 attraction options")
-    total_allocated_budget: float = Field(..., description="Budget allocated for attractions")
+class ItineraryPlanLLM(BaseModel):
+    """
+    Schema for final planning LLM output - SINGLE itinerary with optional activities
 
+    This schema validates the JSON output from the second LLM call (planning step)
+    """
+    model_config = {"extra": "forbid"}
 
-class RestaurantAgentOutput(BaseModel):
-    """Output schema for Restaurant Agent"""
-    options: List[Restaurant] = Field(..., max_length=3, description="Up to 3 restaurant options")
-    total_allocated_budget: float = Field(..., description="Budget allocated for restaurants")
+    hotel_index: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Index of selected hotel (null if no budget provided)"
+    )
+    attraction_indices: List[int] = Field(
+        ...,
+        min_length=1,
+        description="Indices of main attractions to include"
+    )
+    restaurant_indices: List[int] = Field(
+        default_factory=list,
+        description="Indices of main restaurants to include (empty if no restaurants searched)"
+    )
+    daily_schedule: List[DaySchedule] = Field(
+        ...,
+        min_length=1,
+        description="Day-by-day schedule with adaptive time granularity"
+    )
+    optional_activities: List[OptionalActivity] = Field(
+        default_factory=list,
+        description="Alternative activities user can swap in"
+    )
+    estimated_total: Optional[str] = Field(
+        None,
+        description="Estimated total cost (null if no budget)"
+    )
+    reasoning: str = Field(
+        ...,
+        min_length=10,
+        max_length=1000,
+        description="Brief explanation of itinerary choices"
+    )
 
+    @field_validator("daily_schedule")
+    @classmethod
+    def validate_schedule_order(cls, v):
+        """Ensure days are in sequential order"""
+        if not v:
+            raise ValueError("Daily schedule cannot be empty")
 
-class BudgetAllocation(BaseModel):
-    """Budget allocation across categories"""
-    hotel_budget: float = Field(..., description="Budget for hotels")
-    attractions_budget: float = Field(..., description="Budget for attractions")
-    restaurants_budget: float = Field(..., description="Budget for restaurants")
-    contingency: float = Field(..., description="Remaining contingency budget")
+        for i, day in enumerate(v):
+            expected_day = i + 1
+            if day.day_number != expected_day:
+                raise ValueError(f"Day numbers must be sequential. Expected {expected_day}, got {day.day_number}")
 
-
-class ItineraryPlan(BaseModel):
-    """Schema for orchestrator LLM output - single itinerary plan"""
-    style: str = Field(..., description="Itinerary style (budget-friendly, balanced, premium)")
-    hotel_index: int = Field(..., ge=0, description="Index of selected hotel")
-    attraction_indices: List[int] = Field(..., description="Indices of selected attractions")
-    restaurant_indices: List[int] = Field(..., description="Indices of selected restaurants")
-    reasoning: str = Field(..., description="Reasoning for this itinerary choice")
-
-
-class OrchestratorLLMOutput(BaseModel):
-    """Schema for orchestrator LLM output - array of itinerary plans"""
-    itineraries: List[ItineraryPlan] = Field(..., max_length=3, description="Up to 3 itinerary plans")
+        return v

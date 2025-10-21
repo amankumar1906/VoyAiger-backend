@@ -16,13 +16,13 @@ class Settings(BaseSettings):
     log_level: str = Field(default="info", alias="LOG_LEVEL")
 
     # Model Settings
-    model_name: str = "gemini-2.0-flash-lite"
-    model_temperature: float = 0.7
+    model_name: str = "gemini-2.5-flash-lite"
+    model_temperature: float = 0.2
 
     # Budget Validation
     min_budget: float = 100.0
     max_budget: float = 100000.0
-    max_trip_days: int = 365
+    max_trip_days: int = 7  # Max 7 days for day-by-day itineraries
 
     class Config:
         env_file = ".env"

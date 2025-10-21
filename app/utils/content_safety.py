@@ -1,6 +1,6 @@
 """Content safety checks for LLM outputs"""
 from typing import Dict, Any
-import google.generativeai as genai
+from langchain_google_genai import HarmBlockThreshold, HarmCategory
 from ..config import settings
 
 
@@ -20,10 +20,10 @@ def configure_safety_settings():
         Safety settings dictionary for Gemini
     """
     return {
-        "HARM_CATEGORY_HARASSMENT": "BLOCK_MEDIUM_AND_ABOVE",
-        "HARM_CATEGORY_HATE_SPEECH": "BLOCK_MEDIUM_AND_ABOVE",
-        "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_MEDIUM_AND_ABOVE",
-        "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_MEDIUM_AND_ABOVE",
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
     }
 
 
@@ -115,3 +115,34 @@ def validate_agent_output(output: str) -> bool:
             )
 
     return True
+
+
+async def safe_llm_call(llm_func, *args, **kwargs):
+    """
+    Wrapper for LLM calls with automatic safety checking
+
+    Args:
+        llm_func: Async LLM function to call (e.g., llm.ainvoke)
+        *args: Positional arguments for llm_func
+        **kwargs: Keyword arguments for llm_func
+
+    Returns:
+        LLM response if safe
+
+    Raises:
+        ContentSafetyError: If response fails safety checks
+
+    Example:
+        response = await safe_llm_call(llm.ainvoke, [HumanMessage(content=prompt)])
+    """
+    # Call the LLM function
+    response = await llm_func(*args, **kwargs)
+
+    # Run content safety check
+    check_content_safety(response)
+
+    # Additional validation for text content
+    if hasattr(response, 'content'):
+        validate_agent_output(response.content)
+
+    return response

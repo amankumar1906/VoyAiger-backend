@@ -40,6 +40,7 @@ Thumbs.db
 
 # Project specific
 TODO.md
+architecture.md
 
 # Testing
 .pytest_cache/
@@ -48,3 +49,6 @@ htmlcov/
 
 # Logs
 *.log
+Notes.md
+.claude
+logs.txt

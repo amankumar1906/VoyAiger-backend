@@ -1,12 +1,19 @@
 """
 VoyAIger Backend - AI-powered travel itinerary generator
+
+REFACTORED ARCHITECTURE:
+- Budget optional (extracted from preferences)
+- Weather-aware suggestions (Open-Meteo API)
+- Single itinerary with optional activities
+- Strict security (prompt injection prevention)
+- Pydantic validation on all LLM outputs
 """
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError as PydanticValidationError
 from .schemas.request import GenerateItineraryRequest
 from .schemas.response import GenerateItineraryResponse, ErrorResponse
-from .validators.input_validator import validate_request, ValidationError
-from .agents.orchestrator import OrchestratorAgent
+from .agents.travel_agent import TravelAgent
 from .utils.content_safety import ContentSafetyError
 
 app = FastAPI(
@@ -45,51 +52,58 @@ async def health():
 )
 async def generate_itinerary(request: GenerateItineraryRequest):
     """
-    Generate travel itineraries based on city, budget, and dates
+    Generate personalized travel itinerary
+
+    NEW: Budget is optional (extracted from preferences)
+    NEW: Returns single itinerary with optional activities
 
     Args:
-        request: Itinerary generation request with city, budget, and dates
+        request: Request with city, dates, and optional preferences
 
     Returns:
-        GenerateItineraryResponse with up to 3 itinerary options
+        GenerateItineraryResponse with single personalized itinerary
 
     Raises:
-        HTTPException: Various errors for validation, budget, or API failures
+        HTTPException: Various errors for validation, API failures, or safety
     """
-    orchestrator = None
+    agent = None
 
     try:
-        # Validate request
-        validation_meta = validate_request(request)
+        # Calculate trip duration
+        trip_days = (request.dates.end - request.dates.start).days
 
-        # Create orchestrator
-        orchestrator = OrchestratorAgent()
+        # Create travel agent
+        agent = TravelAgent()
 
-        # Generate itineraries
-        itineraries = await orchestrator.generate_itineraries(
-            city=request.city,
-            budget=request.budget,
+        # Generate itinerary (single, not 3 options)
+        itinerary = await agent.generate_itinerary(
+            city_name=request.city.name,
+            latitude=request.city.latitude,
+            longitude=request.city.longitude,
             start_date=request.dates.start,
-            end_date=request.dates.end
+            end_date=request.dates.end,
+            preferences=request.preferences
         )
 
         return GenerateItineraryResponse(
-            city=request.city,
-            options=itineraries,
-            message=f"Generated {len(itineraries)} itinerary options for your {validation_meta['trip_duration_days']}-day trip"
+            city=request.city.name,
+            itinerary=itinerary,
+            message=f"Generated personalized {trip_days}-day itinerary for {request.city.name}"
         )
 
-    except ValidationError as e:
+    except PydanticValidationError as e:
+        # Pydantic validation errors (from request or LLM output)
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "ValidationError",
-                "message": e.message,
-                "details": e.details
+                "message": "Invalid input or LLM output format",
+                "details": {"errors": str(e)}
             }
         )
 
     except ContentSafetyError as e:
+        # Content safety violations
         raise HTTPException(
             status_code=400,
             detail={
@@ -99,28 +113,29 @@ async def generate_itinerary(request: GenerateItineraryRequest):
             }
         )
 
+    except ValueError as e:
+        # Business logic errors (invalid city, budget too low, etc.)
+        error_msg = str(e)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "InvalidRequest",
+                "message": error_msg,
+                "details": {}
+            }
+        )
+
     except Exception as e:
         error_message = str(e)
 
-        # Check if it's a budget error
-        if "budget" in error_message.lower() or "increase" in error_message.lower():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "BudgetError",
-                    "message": error_message,
-                    "details": {}
-                }
-            )
-
         # API failures
-        if "api" in error_message.lower() or "search failed" in error_message.lower():
+        if any(keyword in error_message.lower() for keyword in ['api', 'timeout', 'connection', 'unavailable']):
             raise HTTPException(
                 status_code=503,
                 detail={
                     "error": "ServiceUnavailable",
-                    "message": error_message,
-                    "details": {}
+                    "message": "External API temporarily unavailable. Please try again.",
+                    "details": {"original_error": error_message}
                 }
             )
 
@@ -135,6 +150,6 @@ async def generate_itinerary(request: GenerateItineraryRequest):
         )
 
     finally:
-        # Clean up orchestrator
-        if orchestrator:
-            await orchestrator.close()
+        # Clean up agent
+        if agent:
+            await agent.close()
