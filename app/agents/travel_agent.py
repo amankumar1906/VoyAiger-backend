@@ -484,6 +484,14 @@ CREATE ITINERARY:
             [HumanMessage(content=planning_prompt)]
         )
 
+        # Check if LLM returned None (usually due to content safety filters)
+        if itinerary_plan is None:
+            logger.error("❌ LLM returned None - likely blocked by content safety filters")
+            raise ValueError(
+                "Unable to generate itinerary. The request or content may have been flagged for safety reasons. "
+                "Please try with different preferences or a different city."
+            )
+
         logger.info("=" * 80)
         logger.info("LLM STRUCTURED OUTPUT RECEIVED:")
         logger.info("=" * 80)
