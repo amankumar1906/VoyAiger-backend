@@ -38,7 +38,12 @@ class DateRange(BaseModel):
 
 class CityLocation(BaseModel):
     """City location with coordinates from Google Autocomplete"""
-    name: str = Field(..., description="City name (e.g., 'Miami, FL')")
+    name: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="City name (e.g., 'Miami, FL')"
+    )
     latitude: float = Field(..., ge=-90, le=90, description="Latitude coordinate")
     longitude: float = Field(..., ge=-180, le=180, description="Longitude coordinate")
 
@@ -57,6 +62,7 @@ class GenerateItineraryRequest(BaseModel):
     dates: DateRange = Field(..., description="Trip date range")
     preferences: Optional[str] = Field(
         None,
+        min_length=1,
         max_length=500,
         description="Unstructured preferences (e.g., 'I love nightlife and have $1500 budget')"
     )

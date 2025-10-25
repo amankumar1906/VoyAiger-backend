@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     max_budget: float = 100000.0
     max_trip_days: int = 7  # Max 7 days for day-by-day itineraries
 
+    # Security Settings
+    request_timeout_seconds: int = Field(default=60, alias="REQUEST_TIMEOUT_SECONDS")
+    max_preferences_length: int = Field(default=500, alias="MAX_PREFERENCES_LENGTH")
+    max_city_length: int = Field(default=100, alias="MAX_CITY_LENGTH")
+
     class Config:
         env_file = ".env"
         case_sensitive = False

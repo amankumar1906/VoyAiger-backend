@@ -7,14 +7,19 @@ REFACTORED ARCHITECTURE:
 - Single itinerary with optional activities
 - Strict security (prompt injection prevention)
 - Pydantic validation on all LLM outputs
+- In-memory rate limiting (2 requests/minute per IP)
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.timeout import TimeoutMiddleware
 from pydantic import ValidationError as PydanticValidationError
 from .schemas.request import GenerateItineraryRequest
 from .schemas.response import GenerateItineraryResponse, ErrorResponse
 from .agents.travel_agent import TravelAgent
 from .utils.content_safety import ContentSafetyError
+from .utils.rate_limiter import InMemoryRateLimiter
+from .middleware.security_headers import SecurityHeadersMiddleware
+from .config import settings
 
 app = FastAPI(
     title="VoyAIger API",
@@ -22,10 +27,22 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# CORS middleware for frontend communication
+# Initialize rate limiter (2 requests per hour per IP)
+rate_limiter = InMemoryRateLimiter(requests_per_hour=2)
+
+# Add security middleware in correct order (bottom to top execution)
+# 1. Security headers (outermost - applied last)
+app.add_middleware(SecurityHeadersMiddleware)
+
+# 2. Request timeout
+app.add_middleware(TimeoutMiddleware, timeout=settings.request_timeout_seconds)
+
+# 3. CORS middleware for frontend communication
+# For production on Render + Vercel, update allow_origins to:
+# allow_origins=["https://your-app.vercel.app"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure this properly in production
+    allow_origins=["*"],  # TODO: Restrict to your Vercel URL in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -46,26 +63,42 @@ async def health():
     response_model=GenerateItineraryResponse,
     responses={
         400: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
         503: {"model": ErrorResponse},
         500: {"model": ErrorResponse}
     }
 )
-async def generate_itinerary(request: GenerateItineraryRequest):
+async def generate_itinerary(request: GenerateItineraryRequest, req: Request):
     """
     Generate personalized travel itinerary
 
     NEW: Budget is optional (extracted from preferences)
     NEW: Returns single itinerary with optional activities
+    NEW: Rate limited to 2 requests per hour per IP
 
     Args:
         request: Request with city, dates, and optional preferences
+        req: FastAPI Request object for client IP extraction
 
     Returns:
         GenerateItineraryResponse with single personalized itinerary
 
     Raises:
-        HTTPException: Various errors for validation, API failures, or safety
+        HTTPException: Various errors for validation, API failures, safety, or rate limiting
     """
+    # Check rate limit
+    client_ip = req.client.host
+    if not rate_limiter.is_allowed(client_ip):
+        remaining = rate_limiter.get_remaining(client_ip)
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "RateLimitExceeded",
+                "message": "Too many requests. Maximum 2 requests per hour allowed.",
+                "details": {"remaining_requests": remaining, "retry_after_seconds": 3600}
+            }
+        )
+
     agent = None
 
     try:
