@@ -444,7 +444,8 @@ CREATE ITINERARY:
 - hotel_index: number or null (if no hotels searched)
 - attraction_indices: [list of indices to include]
 - restaurant_indices: [list of indices to include]
-- daily_schedule: [{trip_days} days with activities]
+- daily_schedule: [{trip_days} days with activities and weather]
+  * For each day: Include WEATHER from gathered data (e.g., "Sunny, 75F - 82F" or "Partly cloudy, 20% rain")
 - optional_activities: [2-4 alternatives]
 - estimated_total: "$X-$Y" or null
 - reasoning: Brief explanation

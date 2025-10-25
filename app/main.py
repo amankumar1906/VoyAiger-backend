@@ -11,7 +11,6 @@ REFACTORED ARCHITECTURE:
 """
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.timeout import TimeoutMiddleware
 from pydantic import ValidationError as PydanticValidationError
 from .schemas.request import GenerateItineraryRequest
 from .schemas.response import GenerateItineraryResponse, ErrorResponse
@@ -19,6 +18,7 @@ from .agents.travel_agent import TravelAgent
 from .utils.content_safety import ContentSafetyError
 from .utils.rate_limiter import InMemoryRateLimiter
 from .middleware.security_headers import SecurityHeadersMiddleware
+from .middleware.timeout import CustomTimeoutMiddleware
 from .config import settings
 
 app = FastAPI(
@@ -35,7 +35,7 @@ rate_limiter = InMemoryRateLimiter(requests_per_hour=2)
 app.add_middleware(SecurityHeadersMiddleware)
 
 # 2. Request timeout
-app.add_middleware(TimeoutMiddleware, timeout=settings.request_timeout_seconds)
+app.add_middleware(CustomTimeoutMiddleware, timeout_seconds=settings.request_timeout_seconds)
 
 # 3. CORS middleware for frontend communication
 # For production on Render + Vercel, update allow_origins to:

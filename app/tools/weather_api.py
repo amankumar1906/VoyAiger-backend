@@ -25,7 +25,7 @@ class WeatherAPI:
         Get coordinates for a city
 
         Args:
-            city_name: City name (e.g., "Miami")
+            city_name: City name (e.g., "Miami" or "Miami, FL")
 
         Returns:
             Dict with latitude and longitude
@@ -33,8 +33,11 @@ class WeatherAPI:
         Raises:
             Exception: If city not found
         """
+        # Extract just the city name if state/country is included (e.g., "Miami, FL" -> "Miami")
+        city_only = city_name.split(',')[0].strip()
+
         params = {
-            "name": city_name,
+            "name": city_only,
             "count": 1,
             "language": "en",
             "format": "json"
@@ -46,7 +49,7 @@ class WeatherAPI:
         data = response.json()
 
         if "results" not in data or not data["results"]:
-            raise Exception(f"City '{city_name}' not found")
+            raise Exception(f"City '{city_only}' not found")
 
         result = data["results"][0]
 
