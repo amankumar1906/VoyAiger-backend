@@ -492,6 +492,14 @@ CREATE ITINERARY:
                 "Please try with different preferences or a different city."
             )
 
+        # Double-check itinerary_plan is not None before logging
+        if itinerary_plan is None:
+            logger.error("❌ CRITICAL: itinerary_plan is None after safe_llm_call")
+            raise ValueError(
+                "Unable to generate itinerary. The request or content may have been flagged for safety reasons. "
+                "Please try with different preferences or a different city."
+            )
+
         logger.info("=" * 80)
         logger.info("LLM STRUCTURED OUTPUT RECEIVED:")
         logger.info("=" * 80)
