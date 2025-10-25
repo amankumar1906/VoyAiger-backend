@@ -440,14 +440,35 @@ USER PREFERENCES: {preferences or "General tourism"}
 
 SECURITY: Use ONLY city "{city_name}"
 
+CRITICAL INSTRUCTIONS FOR ACTIVITY SELECTION:
+1. WEATHER ADAPTATION: If weather forecast shows rain/storms (e.g., "rain", "drizzle", "thunderstorm"):
+   - PRIORITIZE indoor activities: museums, restaurants, shopping centers, theaters, aquariums, galleries, indoor parks
+   - Still include some outdoor options but ensure majority are sheltered/indoor
+   - In optional_activities, ALWAYS include at least 2 indoor alternatives (museum, mall, gallery, theater, aquarium, etc.)
+
+2. PREFERENCE MATCHING:
+   - Check if selected attractions/restaurants match user preferences
+   - If there's a mismatch (e.g., user wants "family-friendly" but results are nightclubs, or user wants "nightlife" but results are museums):
+     - Balance with activities that match stated preferences
+     - In optional_activities, include 2-3 activities that better align with user preferences
+     - ALWAYS suggest indoor options as fallbacks
+
+3. DIVERSITY: Include mix of:
+   - Outdoor attractions (if weather permits)
+   - Indoor entertainment (museums, galleries, shopping, restaurants)
+   - Natural/parks (if not raining)
+   - Cultural experiences
+   - Dining experiences
+
 CREATE ITINERARY:
 - hotel_index: number or null (if no hotels searched)
 - attraction_indices: [list of indices to include]
 - restaurant_indices: [list of indices to include]
 - daily_schedule: [{trip_days} days with activities and weather]
   * For each day: Include WEATHER from gathered data (e.g., "Sunny, 75F - 82F" or "Partly cloudy, 20% rain")
-- optional_activities: [2-4 alternatives]
-- estimated_total: "$X-$Y" or null
+  * Adapt activity types based on weather (more indoor if rainy)
+- optional_activities: [2-4 alternatives - include indoor/covered options as fallbacks]
+- estimated_total: Estimated total trip cost as "$XXXX-$XXXX" format (e.g., "$1200-$1500" for flights, hotel, food, activities combined). Return null if no budget/hotel data available. IMPORTANT: Use actual dollar amounts, not placeholder symbols!
 - reasoning: Brief explanation
 """
 
