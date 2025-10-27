@@ -469,7 +469,12 @@ CREATE ITINERARY:
   * Adapt activity types based on weather (more indoor if rainy)
 - optional_activities: [2-4 alternatives - include indoor/covered options as fallbacks]
 - estimated_total: Estimated total trip cost as "$XXXX-$XXXX" format (e.g., "$1200-$1500" for flights, hotel, food, activities combined). Return null if no budget/hotel data available. IMPORTANT: Use actual dollar amounts, not placeholder symbols!
-- reasoning: Brief explanation
+- reasoning: Explain WHY you created this itinerary and HOW it considers the user's interests. Include:
+  * How the selected activities match the user's preferences (e.g., "Your preference for nightlife is reflected in the evening activities at clubs and bars")
+  * Why specific accommodations/restaurants were chosen
+  * How weather influenced the activity selection (if applicable)
+  * Any compromises or trade-offs made (e.g., "We balanced your budget constraint with premium dining experiences")
+  * Make it personal and show understanding of what the user wants
 """
 
         logger.info("Configuring LLM with structured output schema (ItineraryPlanLLM)...")
@@ -584,5 +589,6 @@ CREATE ITINERARY:
             hotel=hotel,
             daily_plans=daily_plans,
             optional_activities=plan.optional_activities,
-            estimated_total=plan.estimated_total
+            estimated_total=plan.estimated_total,
+            ai_reasoning=plan.reasoning
         )

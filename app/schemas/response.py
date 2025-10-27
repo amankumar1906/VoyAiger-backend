@@ -81,6 +81,10 @@ class Itinerary(BaseModel):
         None,
         description="Estimated total cost range (e.g., '$1200-$1500'). Null if no budget."
     )
+    ai_reasoning: Optional[str] = Field(
+        None,
+        description="AI explanation of why this itinerary was created and how it matches user interests"
+    )
 
 
 class GenerateItineraryResponse(BaseModel):
