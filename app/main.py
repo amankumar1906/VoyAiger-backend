@@ -38,14 +38,14 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(CustomTimeoutMiddleware, timeout_seconds=settings.request_timeout_seconds)
 
 # 3. CORS middleware for frontend communication
-# For production on Render + Vercel, update allow_origins to:
-# allow_origins=["https://your-app.vercel.app"]
+# Restricts to allowed origins from environment (default: https://voyaiger.vercel.app)
+allowed_origins_list = [origin.strip() for origin in settings.allowed_origins.split(",")]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # TODO: Restrict to your Vercel URL in production
+    allow_origins=allowed_origins_list,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 @app.get("/")

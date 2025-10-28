@@ -29,6 +29,13 @@ class Settings(BaseSettings):
     max_preferences_length: int = Field(default=500, alias="MAX_PREFERENCES_LENGTH")
     max_city_length: int = Field(default=100, alias="MAX_CITY_LENGTH")
 
+    # CORS Settings
+    allowed_origins: str = Field(
+        default="https://voyaiger.vercel.app",
+        alias="ALLOWED_ORIGINS",
+        description="Comma-separated list of allowed origins for CORS"
+    )
+
     class Config:
         env_file = ".env"
         case_sensitive = False
