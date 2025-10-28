@@ -27,8 +27,8 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Initialize rate limiter (2 requests per hour per IP)
-rate_limiter = InMemoryRateLimiter(requests_per_hour=2)
+# Initialize rate limiter (2 requests per hour per IP, 10 requests per minute globally)
+rate_limiter = InMemoryRateLimiter(requests_per_hour=2, global_requests_per_minute=10)
 
 # Add security middleware in correct order (bottom to top execution)
 # 1. Security headers (outermost - applied last)
@@ -86,7 +86,7 @@ async def generate_itinerary(request: GenerateItineraryRequest, req: Request):
     Raises:
         HTTPException: Various errors for validation, API failures, safety, or rate limiting
     """
-    # Check rate limit
+    # Check rate limit (per-IP and global)
     client_ip = req.client.host
     if not rate_limiter.is_allowed(client_ip):
         remaining = rate_limiter.get_remaining(client_ip)
@@ -94,8 +94,8 @@ async def generate_itinerary(request: GenerateItineraryRequest, req: Request):
             status_code=429,
             detail={
                 "error": "RateLimitExceeded",
-                "message": "Too many requests. Maximum 2 requests per hour allowed.",
-                "details": {"remaining_requests": remaining, "retry_after_seconds": 3600}
+                "message": "Too many requests. Limits: 2 per hour per IP.",
+                "details": {"remaining_requests": remaining, "retry_after_seconds": 60}
             }
         )
 
