@@ -484,25 +484,26 @@ CREATE ITINERARY:
         planning_llm = self.llm.with_structured_output(ItineraryPlanLLM)
 
         logger.info("Calling planning LLM with structured output...")
-        itinerary_plan = await safe_llm_call(
-            planning_llm.ainvoke,
-            [HumanMessage(content=planning_prompt)]
-        )
-
-        # Check if LLM returned None (usually due to content safety filters)
-        if itinerary_plan is None:
-            logger.error("❌ LLM returned None - likely blocked by content safety filters")
-            raise ValueError(
-                "Unable to generate itinerary. The request or content may have been flagged for safety reasons. "
-                "Please try with different preferences or a different city."
+        try:
+            itinerary_plan = await safe_llm_call(
+                planning_llm.ainvoke,
+                [HumanMessage(content=planning_prompt)]
             )
+        except Exception as e:
+            logger.error(f"❌ LLM call failed with exception: {type(e).__name__}: {str(e)}")
+            raise
 
-        # Double-check itinerary_plan is not None before logging
+        # Check if LLM returned None (usually due to content safety filters or structured output issues)
         if itinerary_plan is None:
-            logger.error("❌ CRITICAL: itinerary_plan is None after safe_llm_call")
+            logger.error("❌ LLM returned None - likely blocked by Gemini's content safety filters")
+            logger.error(f"   City: {city_name}")
+            logger.error(f"   Preferences: {preferences}")
+            logger.error(f"   This appears to be a FALSE POSITIVE - the request is legitimate")
+            logger.error(f"   Consider adjusting safety settings further or retrying")
             raise ValueError(
-                "Unable to generate itinerary. The request or content may have been flagged for safety reasons. "
-                "Please try with different preferences or a different city."
+                "Unable to generate itinerary due to an API safety filter issue. "
+                "This appears to be a false positive. Please try again in a moment, "
+                "or contact support if the issue persists."
             )
 
         logger.info("=" * 80)

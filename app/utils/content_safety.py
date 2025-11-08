@@ -16,14 +16,17 @@ def configure_safety_settings():
     """
     Configure Gemini safety settings
 
+    Uses BLOCK_ONLY_HIGH to avoid false positives on normal travel requests.
+    MEDIUM threshold was too strict and flagged legitimate content.
+
     Returns:
         Safety settings dictionary for Gemini
     """
     return {
-        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+        HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
+        HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_ONLY_HIGH,
     }
 
 
@@ -135,14 +138,28 @@ async def safe_llm_call(llm_func, *args, **kwargs):
     Example:
         response = await safe_llm_call(llm.ainvoke, [HumanMessage(content=prompt)])
     """
-    # Call the LLM function
-    response = await llm_func(*args, **kwargs)
+    try:
+        # Call the LLM function
+        response = await llm_func(*args, **kwargs)
 
-    # Run content safety check
-    check_content_safety(response)
+        # Check if response is None (can happen with Gemini's content filters or structured output failures)
+        if response is None:
+            # This is likely a false positive from Gemini's safety filters
+            # Return None and let the caller handle it with better context
+            return None
 
-    # Additional validation for text content
-    if hasattr(response, 'content'):
-        validate_agent_output(response.content)
+        # Run content safety check
+        check_content_safety(response)
 
-    return response
+        # Additional validation for text content
+        if hasattr(response, 'content'):
+            validate_agent_output(response.content)
+
+        return response
+
+    except Exception as e:
+        # If it's already a ContentSafetyError, re-raise it
+        if isinstance(e, ContentSafetyError):
+            raise
+        # Log and re-raise other exceptions
+        raise
