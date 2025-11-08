@@ -7,6 +7,8 @@ from typing import Optional
 from datetime import date, datetime
 import logging
 from pathlib import Path
+import json
+import google.generativeai as genai
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
 from langchain_core.tools import tool
@@ -99,6 +101,155 @@ class TravelAgent:
         except Exception as e:
             logger.error(f"API key test failed: {str(e)}")
             raise
+
+    def _resolve_schema_refs(self, schema, defs):
+        """Recursively resolve $ref in schema by inlining definitions"""
+        if isinstance(schema, dict):
+            if "$ref" in schema:
+                # Extract the definition name from $ref like "#/$defs/DaySchedule"
+                ref_path = schema["$ref"].split("/")[-1]
+                if ref_path in defs:
+                    # Replace $ref with the actual definition
+                    return self._resolve_schema_refs(defs[ref_path], defs)
+            else:
+                # Recursively process all nested dictionaries
+                return {k: self._resolve_schema_refs(v, defs) for k, v in schema.items()}
+        elif isinstance(schema, list):
+            # Recursively process list items
+            return [self._resolve_schema_refs(item, defs) for item in schema]
+        return schema
+
+    def _remove_unsupported_fields(self, schema):
+        """
+        Keep only fields that Gemini actually supports.
+        Based on testing, only these core fields work:
+        - type, properties, required, items, description, enum, format
+        """
+        if isinstance(schema, dict):
+            # Handle anyOf (used for Optional fields) - flatten to first type that's not null
+            if "anyOf" in schema:
+                any_of = schema["anyOf"]
+                # Find first non-null type
+                for option in any_of:
+                    if option.get("type") != "null":
+                        # Replace anyOf with the actual type
+                        schema = {**schema, **option}
+                        break
+                schema.pop("anyOf", None)
+
+            # Filter to supported fields at THIS level only - minimal set that works
+            supported = {
+                "type", "properties", "required", "items", "description", "enum", "format"
+            }
+            filtered = {k: v for k, v in schema.items() if k in supported}
+
+            # NOW recursively process nested structures
+            result = {}
+            for k, v in filtered.items():
+                if k == "properties" and isinstance(v, dict):
+                    # Recursively clean each property definition
+                    result[k] = {prop_name: self._remove_unsupported_fields(prop_def)
+                                for prop_name, prop_def in v.items()}
+                elif k == "items" and isinstance(v, dict):
+                    # Recursively clean array item schema
+                    result[k] = self._remove_unsupported_fields(v)
+                else:
+                    # Keep as-is for other fields
+                    result[k] = v
+
+            # Fix required field - only keep properties that still exist
+            if "required" in result and "properties" in result:
+                existing_props = set(result["properties"].keys())
+                result["required"] = [prop for prop in result["required"] if prop in existing_props]
+
+            return result
+        elif isinstance(schema, list):
+            return [self._remove_unsupported_fields(item) for item in schema]
+        return schema
+
+    async def _call_gemini_with_schema(self, prompt: str, schema_class):
+        """
+        Call Gemini API directly with JSON schema for structured output.
+        This bypasses LangChain's with_structured_output which has compatibility issues.
+        Uses GenerativeModel with GenerationConfig.
+        """
+        import asyncio
+
+        logger.info("🔄 Calling Gemini API directly with response schema...")
+
+        try:
+            # Configure Gemini with API key
+            genai.configure(api_key=settings.gemini_api_key)
+
+            # Get and clean schema - remove fields unsupported by Gemini
+            raw_schema = schema_class.model_json_schema()
+            logger.info(f"📋 Raw schema size: {len(json.dumps(raw_schema))} chars")
+
+            # Extract $defs and resolve $ref references
+            defs = raw_schema.get("$defs", {})
+            resolved_schema = self._resolve_schema_refs(raw_schema, defs)
+
+            # Remove unsupported fields
+            clean_schema = self._remove_unsupported_fields(resolved_schema)
+
+            # Also remove $defs after inlining
+            clean_schema.pop("$defs", None)
+
+            logger.info(f"📋 Cleaned schema size: {len(json.dumps(clean_schema))} chars")
+
+            # Create model with generation config for structured output
+            model = genai.GenerativeModel(
+                model_name=settings.model_name,
+                generation_config=genai.GenerationConfig(
+                    response_mime_type="application/json",
+                    response_schema=clean_schema
+                )
+            )
+
+            # Make async call
+            logger.info(f"📤 Sending request to {settings.model_name}...")
+            response = await asyncio.to_thread(
+                model.generate_content,
+                contents=prompt
+            )
+
+            logger.info(f"📥 Received response from Gemini")
+
+            # Parse and validate using Pydantic
+            if response and response.text:
+                logger.info(f"✅ Response text received ({len(response.text)} chars)")
+
+                # Log raw JSON for debugging
+                logger.debug(f"📄 Raw JSON response: {response.text[:1000]}...")
+
+                # Parse JSON first to fix common issues
+                raw_data = json.loads(response.text)
+
+                # Fix hotel_index: Gemini uses -1 for "no hotel", we need None
+                if "hotel_index" in raw_data and raw_data["hotel_index"] == -1:
+                    logger.info("🔧 Converting hotel_index=-1 to None")
+                    raw_data["hotel_index"] = None
+
+                # Validate with Pydantic
+                result = schema_class.model_validate(raw_data)
+                logger.info("✅ Successfully validated response against schema")
+                return result
+            else:
+                logger.error("❌ Empty response from Gemini")
+                return None
+
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Failed to parse JSON response: {str(e)}")
+            logger.error(f"   Response text: {response.text[:500] if response and response.text else 'None'}")
+            return None
+        except Exception as e:
+            logger.error(f"❌ Gemini API call failed: {type(e).__name__}: {str(e)}")
+            import traceback
+            logger.error(f"   Traceback: {traceback.format_exc()}")
+            # Log raw response for debugging
+            if 'response' in locals() and response and hasattr(response, 'text'):
+                logger.error(f"   Raw response: {response.text[:1000]}")
+            return None
 
     async def close(self):
         """Close API clients"""
@@ -520,15 +671,11 @@ CREATE ITINERARY:
         logger.info("Configuring LLM with structured output schema (ItineraryPlanLLM)...")
         logger.info(f"Planning prompt length: {len(planning_prompt)} chars")
 
-        # Use structured output - guaranteed valid ItineraryPlanLLM object
-        planning_llm = self.llm.with_structured_output(ItineraryPlanLLM)
-
-        logger.info("Calling planning LLM with structured output...")
+        # Use direct Gemini API call instead of LangChain's with_structured_output
+        # This bypasses compatibility issues between LangChain and Gemini structured output
+        logger.info("Calling Gemini API directly with structured output...")
         try:
-            itinerary_plan = await safe_llm_call(
-                planning_llm.ainvoke,
-                [HumanMessage(content=planning_prompt)]
-            )
+            itinerary_plan = await self._call_gemini_with_schema(planning_prompt, ItineraryPlanLLM)
         except Exception as e:
             logger.error(f"❌ LLM call failed with exception: {type(e).__name__}: {str(e)}")
             raise

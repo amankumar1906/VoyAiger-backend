@@ -61,7 +61,7 @@ class ItineraryPlanLLM(BaseModel):
     reasoning: str = Field(
         ...,
         min_length=10,
-        max_length=1000,
+        max_length=2000,
         description="Brief explanation of itinerary choices"
     )
 
