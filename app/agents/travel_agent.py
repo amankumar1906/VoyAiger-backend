@@ -51,14 +51,54 @@ class TravelAgent:
         self.xotelo_api = XoteloAPI()
         self.places_api = GooglePlacesAPI()
         self.weather_api = WeatherAPI()
-        self.llm = ChatGoogleGenerativeAI(
-            model=settings.model_name,
-            temperature=0.2,
-            google_api_key=settings.gemini_api_key,
-            safety_settings=configure_safety_settings()
-        )
-        logger.info(f"✓ APIs initialized: Xotelo, Google Places, Weather")
-        logger.info(f"✓ LLM configured: {settings.model_name} (temp=0.2)")
+
+        # Verify API key is set
+        if not settings.gemini_api_key or settings.gemini_api_key == "":
+            logger.error("❌ GEMINI_API_KEY is not set in environment!")
+            raise ValueError("GEMINI_API_KEY environment variable is required")
+
+        logger.info(f"🔑 Using Gemini API key: {settings.gemini_api_key[:8]}...{settings.gemini_api_key[-4:]}")
+        logger.info(f"🤖 Model: {settings.model_name}")
+
+        try:
+            self.llm = ChatGoogleGenerativeAI(
+                model=settings.model_name,
+                temperature=0.2,
+                google_api_key=settings.gemini_api_key,
+                safety_settings=configure_safety_settings()
+            )
+            logger.info(f"✓ APIs initialized: Xotelo, Google Places, Weather")
+            logger.info(f"✓ LLM configured: {settings.model_name} (temp=0.2)")
+            logger.info(f"✓ Safety settings: BLOCK_ONLY_HIGH (relaxed to avoid false positives)")
+
+            # Test API key with a simple call (non-blocking, done in background)
+            logger.info("🧪 Testing Gemini API connection...")
+            try:
+                import asyncio
+                test_response = asyncio.run(self._test_api_key())
+                if test_response:
+                    logger.info(f"✅ API test successful: {test_response[:50]}...")
+                else:
+                    logger.warning("⚠️ API test returned None - this may indicate issues with structured output")
+            except Exception as test_error:
+                logger.warning(f"⚠️ API test failed (non-fatal): {str(test_error)}")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize LLM: {type(e).__name__}: {str(e)}")
+            logger.error(f"   Check if model '{settings.model_name}' is valid")
+            logger.error(f"   Valid models: gemini-1.5-pro, gemini-1.5-flash, gemini-2.0-flash-exp, gemini-2.5-flash-lite")
+            raise
+
+    async def _test_api_key(self):
+        """Test API key with a simple request"""
+        try:
+            response = await self.llm.ainvoke("Say 'OK' if you can read this.")
+            if response and hasattr(response, 'content'):
+                return response.content
+            return None
+        except Exception as e:
+            logger.error(f"API key test failed: {str(e)}")
+            raise
 
     async def close(self):
         """Close API clients"""
@@ -495,15 +535,23 @@ CREATE ITINERARY:
 
         # Check if LLM returned None (usually due to content safety filters or structured output issues)
         if itinerary_plan is None:
-            logger.error("❌ LLM returned None - likely blocked by Gemini's content safety filters")
+            logger.error("❌ LLM returned None - DIAGNOSIS:")
             logger.error(f"   City: {city_name}")
             logger.error(f"   Preferences: {preferences}")
-            logger.error(f"   This appears to be a FALSE POSITIVE - the request is legitimate")
-            logger.error(f"   Consider adjusting safety settings further or retrying")
+            logger.error(f"   Model: {settings.model_name}")
+            logger.error("")
+            logger.error("   Possible causes:")
+            logger.error("   1. Structured output not fully supported on gemini-2.5-flash-lite")
+            logger.error("   2. Content safety false positive")
+            logger.error("   3. API key quota exceeded")
+            logger.error("   4. Schema validation failure")
+            logger.error("")
+            logger.error("   RECOMMENDATION: Check if API key has structured output access,")
+            logger.error("                   or try with gemini-1.5-flash/gemini-1.5-pro")
             raise ValueError(
-                "Unable to generate itinerary due to an API safety filter issue. "
-                "This appears to be a false positive. Please try again in a moment, "
-                "or contact support if the issue persists."
+                "Unable to generate itinerary. This could be due to: (1) API limitations with structured output, "
+                "(2) API quota exceeded, or (3) content safety filters. "
+                "Please check your Gemini API key permissions and quota at https://aistudio.google.com/app/apikey"
             )
 
         logger.info("=" * 80)

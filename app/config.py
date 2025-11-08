@@ -16,7 +16,9 @@ class Settings(BaseSettings):
     log_level: str = Field(default="info", alias="LOG_LEVEL")
 
     # Model Settings
-    model_name: str = "gemini-2.5-flash-lite"
+    # Note: gemini-2.5-flash-lite may have limited structured output support
+    # If experiencing issues, try: gemini-1.5-flash or gemini-1.5-pro
+    model_name: str = Field(default="gemini-2.5-flash-lite", alias="MODEL_NAME")
     model_temperature: float = 0.2
 
     # Budget Validation

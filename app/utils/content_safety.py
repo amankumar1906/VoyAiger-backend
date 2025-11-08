@@ -138,12 +138,30 @@ async def safe_llm_call(llm_func, *args, **kwargs):
     Example:
         response = await safe_llm_call(llm.ainvoke, [HumanMessage(content=prompt)])
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     try:
+        logger.info("🔄 Making LLM API call...")
         # Call the LLM function
         response = await llm_func(*args, **kwargs)
 
+        logger.info(f"📥 LLM API response received: {type(response)}")
+        logger.info(f"   Response is None: {response is None}")
+
+        if response is not None:
+            logger.info(f"   Response attributes: {dir(response)}")
+            if hasattr(response, '__dict__'):
+                logger.info(f"   Response dict: {response.__dict__}")
+
         # Check if response is None (can happen with Gemini's content filters or structured output failures)
         if response is None:
+            logger.error("❌ LLM returned None - possible causes:")
+            logger.error("   1. Invalid/expired API key")
+            logger.error("   2. API quota exceeded")
+            logger.error("   3. Structured output not supported on this API tier")
+            logger.error("   4. Content blocked by safety filters")
+            logger.error("   5. Model endpoint issue")
             # This is likely a false positive from Gemini's safety filters
             # Return None and let the caller handle it with better context
             return None
@@ -155,9 +173,12 @@ async def safe_llm_call(llm_func, *args, **kwargs):
         if hasattr(response, 'content'):
             validate_agent_output(response.content)
 
+        logger.info("✅ LLM call completed successfully")
         return response
 
     except Exception as e:
+        logger.error(f"❌ Exception during LLM call: {type(e).__name__}: {str(e)}")
+        logger.error(f"   Exception details: {repr(e)}")
         # If it's already a ContentSafetyError, re-raise it
         if isinstance(e, ContentSafetyError):
             raise
