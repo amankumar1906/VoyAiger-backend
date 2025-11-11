@@ -11,6 +11,15 @@ class Settings(BaseSettings):
     google_places_api_key: str = Field(..., alias="GOOGLE_PLACES_API_KEY")
     xotelo_api_key: str = Field(..., alias="XOTELO_API_KEY")
 
+    # Supabase Configuration
+    supabase_url: str = Field(..., alias="SUPABASE_URL")
+    supabase_key: str = Field(..., alias="SUPABASE_KEY")
+
+    # JWT Configuration
+    jwt_secret_key: str = Field(..., alias="JWT_SECRET_KEY")
+    jwt_algorithm: str = Field(default="HS256", alias="JWT_ALGORITHM")
+    jwt_access_token_expire_minutes: int = Field(default=1440, alias="JWT_ACCESS_TOKEN_EXPIRE_MINUTES")  # 24 hours
+
     # Application Settings
     env: str = Field(default="development", alias="ENV")
     log_level: str = Field(default="info", alias="LOG_LEVEL")

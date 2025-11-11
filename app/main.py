@@ -8,17 +8,23 @@ REFACTORED ARCHITECTURE:
 - Strict security (prompt injection prevention)
 - Pydantic validation on all LLM outputs
 - In-memory rate limiting (2 requests/minute per IP)
+- JWT-based authentication with Supabase
 """
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError as PydanticValidationError
+from typing import Dict, Any
 from .schemas.request import GenerateItineraryRequest
 from .schemas.response import GenerateItineraryResponse, ErrorResponse
+from .schemas.auth import UserRegisterRequest, UserLoginRequest, AuthResponse, UserResponse
 from .agents.travel_agent import TravelAgent
 from .utils.content_safety import ContentSafetyError
 from .utils.rate_limiter import InMemoryRateLimiter
+from .utils.auth import hash_password, verify_password, create_access_token, get_token_expiry_seconds
+from .utils.database import create_user, get_user_by_email, create_itinerary
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.timeout import CustomTimeoutMiddleware
+from .middleware.auth import require_auth
 from .config import settings
 
 app = FastAPI(
@@ -58,20 +64,177 @@ async def health():
     """Health check endpoint"""
     return {"status": "healthy"}
 
+
+@app.post(
+    "/auth/register",
+    response_model=AuthResponse,
+    responses={
+        400: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def register(request: UserRegisterRequest):
+    """
+    Register a new user
+
+    Args:
+        request: User registration data (name, email, password)
+
+    Returns:
+        AuthResponse with JWT token and user data
+
+    Raises:
+        HTTPException: If registration fails or email already exists
+    """
+    try:
+        # Hash password
+        password_hash = hash_password(request.password)
+
+        # Create user in database
+        user_data = await create_user(
+            name=request.name,
+            email=request.email,
+            password_hash=password_hash
+        )
+
+        # Create JWT token
+        access_token = create_access_token(
+            data={"sub": user_data["id"], "email": user_data["email"]}
+        )
+
+        return AuthResponse(
+            access_token=access_token,
+            token_type="bearer",
+            expires_in=get_token_expiry_seconds(),
+            user=UserResponse(
+                id=user_data["id"],
+                name=user_data["name"],
+                email=user_data["email"],
+                created_at=user_data["created_at"]
+            )
+        )
+
+    except ValueError as e:
+        # User already exists
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "RegistrationError",
+                "message": str(e),
+                "details": {}
+            }
+        )
+
+    except Exception as e:
+        # Generic error
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to register user",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+@app.post(
+    "/auth/login",
+    response_model=AuthResponse,
+    responses={
+        401: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def login(request: UserLoginRequest):
+    """
+    Login with email and password
+
+    Args:
+        request: User login credentials (email, password)
+
+    Returns:
+        AuthResponse with JWT token and user data
+
+    Raises:
+        HTTPException: If credentials are invalid
+    """
+    try:
+        # Get user by email
+        user_data = await get_user_by_email(request.email)
+
+        if not user_data:
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "AuthenticationError",
+                    "message": "Invalid email or password",
+                    "details": {}
+                }
+            )
+
+        # Verify password
+        if not verify_password(request.password, user_data["password_hash"]):
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "error": "AuthenticationError",
+                    "message": "Invalid email or password",
+                    "details": {}
+                }
+            )
+
+        # Create JWT token
+        access_token = create_access_token(
+            data={"sub": user_data["id"], "email": user_data["email"]}
+        )
+
+        return AuthResponse(
+            access_token=access_token,
+            token_type="bearer",
+            expires_in=get_token_expiry_seconds(),
+            user=UserResponse(
+                id=user_data["id"],
+                name=user_data["name"],
+                email=user_data["email"],
+                created_at=user_data["created_at"]
+            )
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        # Generic error
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to authenticate user",
+                "details": {"original_error": str(e)}
+            }
+        )
+
 @app.post(
     "/generate",
     response_model=GenerateItineraryResponse,
     responses={
         400: {"model": ErrorResponse},
+        401: {"model": ErrorResponse},
         429: {"model": ErrorResponse},
         503: {"model": ErrorResponse},
         500: {"model": ErrorResponse}
     }
 )
-async def generate_itinerary(request: GenerateItineraryRequest, req: Request):
+async def generate_itinerary(
+    request: GenerateItineraryRequest,
+    req: Request,
+    current_user: Dict[str, Any] = Depends(require_auth)
+):
     """
-    Generate personalized travel itinerary
+    Generate personalized travel itinerary (PROTECTED - requires authentication)
 
+    NEW: Requires JWT authentication
+    NEW: Saves itinerary to database
     NEW: Budget is optional (extracted from preferences)
     NEW: Returns single itinerary with optional activities
     NEW: Rate limited to 10 requests per hour
@@ -79,6 +242,7 @@ async def generate_itinerary(request: GenerateItineraryRequest, req: Request):
     Args:
         request: Request with city, dates, and optional preferences
         req: FastAPI Request object for client IP extraction
+        current_user: Authenticated user data from JWT token
 
     Returns:
         GenerateItineraryResponse with single personalized itinerary
@@ -117,6 +281,20 @@ async def generate_itinerary(request: GenerateItineraryRequest, req: Request):
             end_date=request.dates.end,
             preferences=request.preferences
         )
+
+        # Save itinerary to database
+        try:
+            saved_itinerary = await create_itinerary(
+                user_id=current_user["id"],
+                city=request.city.name,
+                start_date=request.dates.start.isoformat(),
+                end_date=request.dates.end.isoformat(),
+                preferences=request.preferences,
+                itinerary_data=itinerary.model_dump()
+            )
+        except Exception as db_error:
+            # Log error but don't fail the request - itinerary was generated successfully
+            print(f"Warning: Failed to save itinerary to database: {str(db_error)}")
 
         return GenerateItineraryResponse(
             city=request.city.name,

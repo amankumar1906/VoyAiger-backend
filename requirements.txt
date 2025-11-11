@@ -19,3 +19,9 @@ langgraph==0.2.52
 
 # Google Gemini API
 google-generativeai==0.8.5
+
+# Authentication & Database
+PyJWT==2.9.0
+supabase==2.11.0
+passlib==1.7.4
+bcrypt==4.2.1

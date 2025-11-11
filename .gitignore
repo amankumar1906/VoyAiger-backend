@@ -52,3 +52,6 @@ htmlcov/
 Notes.md
 .claude
 logs.txt
+
+AUTH_SETUP.md
+database_setup.sql
