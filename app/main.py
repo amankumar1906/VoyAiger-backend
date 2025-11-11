@@ -14,14 +14,14 @@ from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError as PydanticValidationError
 from typing import Dict, Any
-from .schemas.request import GenerateItineraryRequest
-from .schemas.response import GenerateItineraryResponse, ErrorResponse
+from .schemas.request import GenerateItineraryRequest, SaveItineraryRequest
+from .schemas.response import GenerateItineraryResponse, ErrorResponse, Itinerary
 from .schemas.auth import UserRegisterRequest, UserLoginRequest, AuthResponse, UserResponse
 from .agents.travel_agent import TravelAgent
 from .utils.content_safety import ContentSafetyError
 from .utils.rate_limiter import InMemoryRateLimiter
 from .utils.auth import hash_password, verify_password, create_access_token, get_token_expiry_seconds
-from .utils.database import create_user, get_user_by_email, create_itinerary
+from .utils.database import create_user, get_user_by_email, create_itinerary, get_user_itineraries, get_itinerary_by_id
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.timeout import CustomTimeoutMiddleware
 from .middleware.auth import require_auth
@@ -282,19 +282,8 @@ async def generate_itinerary(
             preferences=request.preferences
         )
 
-        # Save itinerary to database
-        try:
-            saved_itinerary = await create_itinerary(
-                user_id=current_user["id"],
-                city=request.city.name,
-                start_date=request.dates.start.isoformat(),
-                end_date=request.dates.end.isoformat(),
-                preferences=request.preferences,
-                itinerary_data=itinerary.model_dump()
-            )
-        except Exception as db_error:
-            # Log error but don't fail the request - itinerary was generated successfully
-            print(f"Warning: Failed to save itinerary to database: {str(db_error)}")
+        # NOTE: Itinerary is NOT auto-saved to database
+        # User must manually save it using the /itineraries/save endpoint
 
         return GenerateItineraryResponse(
             city=request.city.name,
@@ -364,3 +353,159 @@ async def generate_itinerary(
         # Clean up agent
         if agent:
             await agent.close()
+
+
+@app.post(
+    "/itineraries/save",
+    responses={
+        201: {"description": "Itinerary saved successfully"},
+        401: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    },
+    status_code=201
+)
+async def save_itinerary(
+    request: SaveItineraryRequest,
+    current_user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Save an itinerary to user's favorites (PROTECTED - requires authentication)
+
+    Args:
+        request: Request with city, dates, preferences, and itinerary data
+        current_user: Authenticated user data from JWT token
+
+    Returns:
+        Success message with itinerary ID
+
+    Raises:
+        HTTPException: If save fails
+    """
+    try:
+        # Save itinerary to database
+        saved_itinerary = await create_itinerary(
+            user_id=current_user["id"],
+            city=request.city,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            preferences=request.preferences,
+            itinerary_data=request.itinerary_data
+        )
+
+        return {
+            "message": "Itinerary saved successfully",
+            "itinerary_id": saved_itinerary["id"],
+            "created_at": saved_itinerary["created_at"]
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to save itinerary",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+@app.get(
+    "/itineraries",
+    responses={
+        200: {"description": "List of user's saved itineraries"},
+        401: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def list_itineraries(
+    current_user: Dict[str, Any] = Depends(require_auth),
+    limit: int = 50
+):
+    """
+    Get all saved itineraries for the authenticated user
+
+    Args:
+        current_user: Authenticated user data from JWT token
+        limit: Maximum number of itineraries to return (default: 50)
+
+    Returns:
+        List of saved itineraries
+
+    Raises:
+        HTTPException: If retrieval fails
+    """
+    try:
+        itineraries = await get_user_itineraries(current_user["id"], limit)
+
+        return {
+            "itineraries": itineraries,
+            "count": len(itineraries)
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to retrieve itineraries",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+@app.get(
+    "/itineraries/{itinerary_id}",
+    responses={
+        200: {"description": "Itinerary details"},
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def get_itinerary(
+    itinerary_id: str,
+    current_user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Get a specific itinerary by ID (must belong to authenticated user)
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        current_user: Authenticated user data from JWT token
+
+    Returns:
+        Itinerary details
+
+    Raises:
+        HTTPException: If not found or unauthorized
+    """
+    try:
+        itinerary = await get_itinerary_by_id(itinerary_id, current_user["id"])
+
+        if not itinerary:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "NotFound",
+                    "message": "Itinerary not found or you don't have access to it",
+                    "details": {}
+                }
+            )
+
+        return itinerary
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to retrieve itinerary",
+                "details": {"original_error": str(e)}
+            }
+        )

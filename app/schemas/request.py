@@ -1,6 +1,6 @@
 """Request schemas for API endpoints"""
 from datetime import date, timedelta
-from typing import Optional
+from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -109,5 +109,37 @@ class GenerateItineraryRequest(BaseModel):
                     "end": "2025-11-05"
                 },
                 "preferences": "I love nightlife and have $1500 budget for hotels"
+            }
+        }
+
+
+class SaveItineraryRequest(BaseModel):
+    """Request body for /itineraries/save endpoint"""
+    city: str = Field(..., min_length=1, max_length=100, description="City name")
+    start_date: str = Field(..., description="Trip start date (ISO format)")
+    end_date: str = Field(..., description="Trip end date (ISO format)")
+    preferences: Optional[str] = Field(None, description="User preferences")
+    itinerary_data: Dict[str, Any] = Field(..., description="Complete itinerary JSON data")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "city": "Miami, FL",
+                "start_date": "2025-11-01",
+                "end_date": "2025-11-05",
+                "preferences": "I love beaches and nightlife",
+                "itinerary_data": {
+                    "hotel": {
+                        "name": "Beachfront Hotel",
+                        "address": "123 Ocean Drive",
+                        "price_per_night": 200,
+                        "total_price": 800,
+                        "rating": 4.5,
+                        "amenities": ["Pool", "WiFi"]
+                    },
+                    "daily_plans": [],
+                    "optional_activities": [],
+                    "estimated_total": "$1200-$1500"
+                }
             }
         }
