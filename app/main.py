@@ -8,9 +8,9 @@ REFACTORED ARCHITECTURE:
 - Strict security (prompt injection prevention)
 - Pydantic validation on all LLM outputs
 - In-memory rate limiting (2 requests/minute per IP)
-- JWT-based authentication with Supabase
+- JWT-based authentication with Supabase (HttpOnly cookies)
 """
-from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError as PydanticValidationError
 from typing import Dict, Any
@@ -67,21 +67,22 @@ async def health():
 
 @app.post(
     "/auth/register",
-    response_model=AuthResponse,
+    response_model=UserResponse,
     responses={
         400: {"model": ErrorResponse},
         500: {"model": ErrorResponse}
     }
 )
-async def register(request: UserRegisterRequest):
+async def register(request: UserRegisterRequest, response: Response):
     """
-    Register a new user
+    Register a new user and set JWT in HttpOnly cookie
 
     Args:
         request: User registration data (name, email, password)
+        response: FastAPI response object to set cookies
 
     Returns:
-        AuthResponse with JWT token and user data
+        UserResponse with user data (token is in cookie)
 
     Raises:
         HTTPException: If registration fails or email already exists
@@ -102,16 +103,21 @@ async def register(request: UserRegisterRequest):
             data={"sub": user_data["id"], "email": user_data["email"]}
         )
 
-        return AuthResponse(
-            access_token=access_token,
-            token_type="bearer",
-            expires_in=get_token_expiry_seconds(),
-            user=UserResponse(
-                id=user_data["id"],
-                name=user_data["name"],
-                email=user_data["email"],
-                created_at=user_data["created_at"]
-            )
+        # Set token in HttpOnly cookie
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            httponly=True,
+            secure=settings.env == "production",  # HTTPS only in production
+            samesite="lax",
+            max_age=get_token_expiry_seconds()
+        )
+
+        return UserResponse(
+            id=user_data["id"],
+            name=user_data["name"],
+            email=user_data["email"],
+            created_at=user_data["created_at"]
         )
 
     except ValueError as e:
@@ -139,21 +145,22 @@ async def register(request: UserRegisterRequest):
 
 @app.post(
     "/auth/login",
-    response_model=AuthResponse,
+    response_model=UserResponse,
     responses={
         401: {"model": ErrorResponse},
         500: {"model": ErrorResponse}
     }
 )
-async def login(request: UserLoginRequest):
+async def login(request: UserLoginRequest, response: Response):
     """
-    Login with email and password
+    Login with email and password and set JWT in HttpOnly cookie
 
     Args:
         request: User login credentials (email, password)
+        response: FastAPI response object to set cookies
 
     Returns:
-        AuthResponse with JWT token and user data
+        UserResponse with user data (token is in cookie)
 
     Raises:
         HTTPException: If credentials are invalid
@@ -188,16 +195,21 @@ async def login(request: UserLoginRequest):
             data={"sub": user_data["id"], "email": user_data["email"]}
         )
 
-        return AuthResponse(
-            access_token=access_token,
-            token_type="bearer",
-            expires_in=get_token_expiry_seconds(),
-            user=UserResponse(
-                id=user_data["id"],
-                name=user_data["name"],
-                email=user_data["email"],
-                created_at=user_data["created_at"]
-            )
+        # Set token in HttpOnly cookie
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            httponly=True,
+            secure=settings.env == "production",  # HTTPS only in production
+            samesite="lax",
+            max_age=get_token_expiry_seconds()
+        )
+
+        return UserResponse(
+            id=user_data["id"],
+            name=user_data["name"],
+            email=user_data["email"],
+            created_at=user_data["created_at"]
         )
 
     except HTTPException:
@@ -213,6 +225,22 @@ async def login(request: UserLoginRequest):
                 "details": {"original_error": str(e)}
             }
         )
+
+
+@app.post("/auth/logout")
+async def logout(response: Response):
+    """
+    Logout by clearing the authentication cookie
+
+    Args:
+        response: FastAPI response object to clear cookies
+
+    Returns:
+        Success message
+    """
+    response.delete_cookie(key="access_token")
+    return {"message": "Successfully logged out"}
+
 
 @app.post(
     "/generate",

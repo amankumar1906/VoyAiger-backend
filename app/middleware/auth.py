@@ -1,16 +1,17 @@
 """Authentication middleware for protected routes"""
-from fastapi import HTTPException, Header, Depends
+from fastapi import HTTPException, Cookie, Depends, Request
 from typing import Optional, Dict, Any
 from app.utils.auth import decode_access_token
 from app.utils.database import get_user_by_id
 
 
-async def get_current_user(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+async def get_current_user(request: Request, access_token: Optional[str] = Cookie(None)) -> Dict[str, Any]:
     """
-    Dependency to get the current authenticated user from JWT token
+    Dependency to get the current authenticated user from JWT cookie
 
     Args:
-        authorization: Authorization header with Bearer token
+        request: FastAPI request object
+        access_token: JWT token from HttpOnly cookie
 
     Returns:
         Current user data
@@ -18,7 +19,13 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> Dict[
     Raises:
         HTTPException: If token is missing, invalid, or user not found
     """
-    if not authorization:
+    # If no cookie, check Authorization header as fallback (for backward compatibility during migration)
+    if not access_token:
+        auth_header = request.headers.get("authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            access_token = auth_header.split(" ")[1]
+
+    if not access_token:
         raise HTTPException(
             status_code=401,
             detail={
@@ -29,23 +36,8 @@ async def get_current_user(authorization: Optional[str] = Header(None)) -> Dict[
             headers={"WWW-Authenticate": "Bearer"}
         )
 
-    # Extract token from "Bearer <token>"
-    parts = authorization.split()
-    if len(parts) != 2 or parts[0].lower() != "bearer":
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": "Unauthorized",
-                "message": "Invalid authentication token format. Expected 'Bearer <token>'",
-                "details": {}
-            },
-            headers={"WWW-Authenticate": "Bearer"}
-        )
-
-    token = parts[1]
-
     # Decode and verify token
-    payload = decode_access_token(token)
+    payload = decode_access_token(access_token)
     if not payload:
         raise HTTPException(
             status_code=401,
