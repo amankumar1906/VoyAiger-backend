@@ -176,3 +176,28 @@ async def get_itinerary_by_id(itinerary_id: str, user_id: str) -> Optional[Dict[
     if result.data:
         return result.data[0]
     return None
+
+
+async def update_user_preferences(user_id: str, preferences: list) -> Dict[str, Any]:
+    """
+    Update user preferences
+
+    Args:
+        user_id: User's UUID
+        preferences: List of preference strings
+
+    Returns:
+        Updated user data
+
+    Raises:
+        Exception if update fails
+    """
+    client = SupabaseClient.get_client()
+    result = client.table('users')\
+        .update({'preferences': preferences})\
+        .eq('id', user_id)\
+        .execute()
+
+    if result.data:
+        return result.data[0]
+    raise Exception("Failed to update preferences")

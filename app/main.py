@@ -21,7 +21,7 @@ from .agents.travel_agent import TravelAgent
 from .utils.content_safety import ContentSafetyError
 from .utils.rate_limiter import InMemoryRateLimiter
 from .utils.auth import hash_password, verify_password, create_access_token, get_token_expiry_seconds
-from .utils.database import create_user, get_user_by_email, create_itinerary, get_user_itineraries, get_itinerary_by_id
+from .utils.database import create_user, get_user_by_email, create_itinerary, get_user_itineraries, get_itinerary_by_id, update_user_preferences
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.timeout import CustomTimeoutMiddleware
 from .middleware.auth import require_auth
@@ -50,7 +50,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins_list,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
@@ -240,6 +240,64 @@ async def logout(response: Response):
     """
     response.delete_cookie(key="access_token")
     return {"message": "Successfully logged out"}
+
+
+@app.put("/user/preferences")
+async def update_preferences(
+    request: Request,
+    user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Update user travel preferences
+
+    Args:
+        request: FastAPI request object
+        user: Current authenticated user
+
+    Returns:
+        Success message with updated user data
+
+    Raises:
+        HTTPException: If update fails
+    """
+    try:
+        body = await request.json()
+        preferences = body.get("preferences", [])
+
+        # Validate preferences is a list
+        if not isinstance(preferences, list):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "ValidationError",
+                    "message": "Preferences must be a list",
+                    "details": {}
+                }
+            )
+
+        # Update preferences in database
+        updated_user = await update_user_preferences(user["id"], preferences)
+
+        return {
+            "message": "Preferences updated successfully",
+            "user": UserResponse(
+                id=updated_user["id"],
+                name=updated_user["name"],
+                email=updated_user["email"],
+                created_at=updated_user["created_at"]
+            )
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to update preferences",
+                "details": {"original_error": str(e)}
+            }
+        )
 
 
 @app.post(
