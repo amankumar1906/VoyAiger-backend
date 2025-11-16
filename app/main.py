@@ -109,7 +109,7 @@ async def register(request: UserRegisterRequest, response: Response):
             value=access_token,
             httponly=True,
             secure=settings.env == "production",  # HTTPS only in production
-            samesite="lax",
+            samesite="none" if settings.env == "production" else "lax",  # None for cross-site in production
             max_age=get_token_expiry_seconds()
         )
 
@@ -203,7 +203,7 @@ async def login(request: UserLoginRequest, response: Response):
             value=access_token,
             httponly=True,
             secure=settings.env == "production",  # HTTPS only in production
-            samesite="lax",
+            samesite="none" if settings.env == "production" else "lax",  # None for cross-site in production
             max_age=get_token_expiry_seconds()
         )
 
