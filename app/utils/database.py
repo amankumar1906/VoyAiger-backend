@@ -178,6 +178,37 @@ async def get_itinerary_by_id(itinerary_id: str, user_id: str) -> Optional[Dict[
     return None
 
 
+async def delete_itinerary(itinerary_id: str, user_id: str) -> bool:
+    """
+    Delete an itinerary (must belong to the user)
+
+    Args:
+        itinerary_id: Itinerary UUID
+        user_id: User's UUID (for ownership verification)
+
+    Returns:
+        True if deleted successfully, False if not found or unauthorized
+
+    Raises:
+        Exception if deletion fails
+    """
+    client = SupabaseClient.get_client()
+
+    # First verify the itinerary belongs to the user
+    itinerary = await get_itinerary_by_id(itinerary_id, user_id)
+    if not itinerary:
+        return False
+
+    # Delete the itinerary (feedback will be cascade deleted due to ON DELETE CASCADE)
+    result = client.table('itineraries')\
+        .delete()\
+        .eq('id', itinerary_id)\
+        .eq('user_id', user_id)\
+        .execute()
+
+    return True
+
+
 async def update_user_preferences(user_id: str, preferences: list) -> Dict[str, Any]:
     """
     Update user preferences
@@ -201,3 +232,106 @@ async def update_user_preferences(user_id: str, preferences: list) -> Dict[str, 
     if result.data:
         return result.data[0]
     raise Exception("Failed to update preferences")
+
+
+# Feedback operations
+async def create_or_update_feedback(
+    itinerary_id: str,
+    user_id: str,
+    rating: int,
+    feedback_text: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Create or update feedback for an itinerary
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        user_id: UUID of the user
+        rating: Rating from 1-5
+        feedback_text: Optional text feedback
+
+    Returns:
+        Created/updated feedback data
+
+    Raises:
+        Exception: If operation fails
+    """
+    client = SupabaseClient.get_client()
+
+    # Check if feedback already exists
+    existing = client.table('itinerary_feedback')\
+        .select('*')\
+        .eq('itinerary_id', itinerary_id)\
+        .eq('user_id', user_id)\
+        .execute()
+
+    feedback_data = {
+        'rating': rating,
+        'feedback_text': feedback_text
+    }
+
+    if existing.data:
+        # Update existing feedback
+        result = client.table('itinerary_feedback')\
+            .update(feedback_data)\
+            .eq('itinerary_id', itinerary_id)\
+            .eq('user_id', user_id)\
+            .execute()
+    else:
+        # Create new feedback
+        feedback_data['itinerary_id'] = itinerary_id
+        feedback_data['user_id'] = user_id
+        result = client.table('itinerary_feedback')\
+            .insert(feedback_data)\
+            .execute()
+
+    if result.data:
+        return result.data[0]
+    raise Exception("Failed to create/update feedback")
+
+
+async def get_feedback_by_itinerary(itinerary_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get feedback for an itinerary by the user
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        user_id: UUID of the user
+
+    Returns:
+        Feedback data or None if not found
+    """
+    client = SupabaseClient.get_client()
+    result = client.table('itinerary_feedback')\
+        .select('*')\
+        .eq('itinerary_id', itinerary_id)\
+        .eq('user_id', user_id)\
+        .execute()
+
+    if result.data:
+        return result.data[0]
+    return None
+
+
+async def delete_feedback(itinerary_id: str, user_id: str) -> bool:
+    """
+    Delete feedback for an itinerary
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        user_id: UUID of the user
+
+    Returns:
+        True if deleted successfully
+
+    Raises:
+        Exception: If deletion fails
+    """
+    client = SupabaseClient.get_client()
+    result = client.table('itinerary_feedback')\
+        .delete()\
+        .eq('itinerary_id', itinerary_id)\
+        .eq('user_id', user_id)\
+        .execute()
+
+    return True

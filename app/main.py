@@ -17,11 +17,12 @@ from typing import Dict, Any
 from .schemas.request import GenerateItineraryRequest, SaveItineraryRequest
 from .schemas.response import GenerateItineraryResponse, ErrorResponse, Itinerary
 from .schemas.auth import UserRegisterRequest, UserLoginRequest, AuthResponse, UserResponse
+from .models.feedback import ItineraryFeedbackCreate, ItineraryFeedbackResponse
 from .agents.travel_agent import TravelAgent
 from .utils.content_safety import ContentSafetyError
 from .utils.rate_limiter import InMemoryRateLimiter
 from .utils.auth import hash_password, verify_password, create_access_token, get_token_expiry_seconds
-from .utils.database import create_user, get_user_by_email, get_user_by_id, create_itinerary, get_user_itineraries, get_itinerary_by_id, update_user_preferences
+from .utils.database import create_user, get_user_by_email, get_user_by_id, create_itinerary, get_user_itineraries, get_itinerary_by_id, delete_itinerary, update_user_preferences, create_or_update_feedback, get_feedback_by_itinerary, delete_feedback
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.timeout import CustomTimeoutMiddleware
 from .middleware.auth import require_auth
@@ -649,6 +650,249 @@ async def get_itinerary(
             detail={
                 "error": "InternalServerError",
                 "message": "Failed to retrieve itinerary",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+@app.delete(
+    "/itineraries/{itinerary_id}",
+    responses={
+        200: {"description": "Itinerary deleted successfully"},
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def delete_user_itinerary(
+    itinerary_id: str,
+    current_user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Delete a specific itinerary by ID (must belong to authenticated user)
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        current_user: Authenticated user data from JWT token
+
+    Returns:
+        Success message
+
+    Raises:
+        HTTPException: If not found, unauthorized, or deletion fails
+    """
+    try:
+        deleted = await delete_itinerary(itinerary_id, current_user["id"])
+
+        if not deleted:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "NotFound",
+                    "message": "Itinerary not found or you don't have access to it",
+                    "details": {}
+                }
+            )
+
+        return {
+            "message": "Itinerary deleted successfully",
+            "itinerary_id": itinerary_id
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to delete itinerary",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+# ============================================================================
+# FEEDBACK ENDPOINTS
+# ============================================================================
+
+@app.post(
+    "/itineraries/{itinerary_id}/feedback",
+    response_model=ItineraryFeedbackResponse,
+    responses={
+        200: {"description": "Feedback created/updated successfully"},
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def submit_feedback(
+    itinerary_id: str,
+    feedback: ItineraryFeedbackCreate,
+    current_user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Submit or update feedback for an itinerary
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        feedback: Feedback data (rating and optional text)
+        current_user: Authenticated user data from JWT token
+
+    Returns:
+        Created/updated feedback
+
+    Raises:
+        HTTPException: If itinerary not found or operation fails
+    """
+    try:
+        # Verify itinerary exists and belongs to user
+        itinerary = await get_itinerary_by_id(itinerary_id, current_user["id"])
+        if not itinerary:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "NotFound",
+                    "message": "Itinerary not found or you don't have access to it",
+                    "details": {}
+                }
+            )
+
+        # Create or update feedback
+        result = await create_or_update_feedback(
+            itinerary_id=itinerary_id,
+            user_id=current_user["id"],
+            rating=feedback.rating,
+            feedback_text=feedback.feedback_text
+        )
+
+        return ItineraryFeedbackResponse(**result)
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to submit feedback",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+@app.get(
+    "/itineraries/{itinerary_id}/feedback",
+    response_model=ItineraryFeedbackResponse,
+    responses={
+        200: {"description": "Feedback retrieved successfully"},
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def get_feedback(
+    itinerary_id: str,
+    current_user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Get feedback for an itinerary
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        current_user: Authenticated user data from JWT token
+
+    Returns:
+        Feedback data
+
+    Raises:
+        HTTPException: If feedback not found
+    """
+    try:
+        feedback = await get_feedback_by_itinerary(itinerary_id, current_user["id"])
+
+        if not feedback:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "NotFound",
+                    "message": "No feedback found for this itinerary",
+                    "details": {}
+                }
+            )
+
+        return ItineraryFeedbackResponse(**feedback)
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to retrieve feedback",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+@app.delete(
+    "/itineraries/{itinerary_id}/feedback",
+    responses={
+        200: {"description": "Feedback deleted successfully"},
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def remove_feedback(
+    itinerary_id: str,
+    current_user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Delete feedback for an itinerary
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        current_user: Authenticated user data from JWT token
+
+    Returns:
+        Success message
+
+    Raises:
+        HTTPException: If operation fails
+    """
+    try:
+        # Check if feedback exists
+        feedback = await get_feedback_by_itinerary(itinerary_id, current_user["id"])
+        if not feedback:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "NotFound",
+                    "message": "No feedback found for this itinerary",
+                    "details": {}
+                }
+            )
+
+        await delete_feedback(itinerary_id, current_user["id"])
+
+        return {
+            "message": "Feedback deleted successfully"
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to delete feedback",
                 "details": {"original_error": str(e)}
             }
         )
