@@ -5,6 +5,7 @@ uvicorn[standard]==0.32.0
 # Data Validation & Settings
 pydantic==2.9.2
 pydantic-settings==2.6.0
+email-validator==2.1.0
 
 # Configuration
 python-dotenv==1.0.1
