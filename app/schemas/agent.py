@@ -60,9 +60,9 @@ class ItineraryPlanLLM(BaseModel):
     )
     reasoning: str = Field(
         ...,
-        min_length=10,
-        max_length=2000,
-        description="Brief explanation of itinerary choices"
+        min_length=50,
+        max_length=400,
+        description="Concise 2-3 sentence summary explaining the itinerary's key themes and why these choices work for the user (max 400 characters)"
     )
 
     @field_validator("daily_schedule")

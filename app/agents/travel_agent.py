@@ -498,7 +498,8 @@ class TravelAgent:
 
     async def generate_itinerary(
         self, city_name: str, latitude: float, longitude: float,
-        start_date: date, end_date: date, preferences: Optional[str] = None
+        start_date: date, end_date: date, preferences: Optional[str] = None,
+        user_preferences: Optional[list] = None
     ) -> Itinerary:
         """Generate itinerary - LLM does ALL reasoning"""
 
@@ -508,7 +509,8 @@ class TravelAgent:
         logger.info(f"City: {city_name}")
         logger.info(f"Coordinates: ({latitude}, {longitude})")
         logger.info(f"Dates: {start_date} to {end_date}")
-        logger.info(f"Preferences: {preferences or 'None'}")
+        logger.info(f"User Preferences (from profile): {user_preferences or 'None'}")
+        logger.info(f"Additional Notes: {preferences or 'None'}")
 
         trip_days = (end_date - start_date).days
         logger.info(f"Trip duration: {trip_days} days")
@@ -535,11 +537,25 @@ class TravelAgent:
         agent = create_react_agent(self.llm, tools)
         logger.info("✓ ReACT agent created")
 
+        # Format user preferences for the prompt
+        preferences_text = ""
+        if user_preferences and len(user_preferences) > 0:
+            preferences_text = f"Profile Interests: {', '.join(user_preferences)}"
+
+        if preferences:
+            if preferences_text:
+                preferences_text += f"\nAdditional Notes: {preferences}"
+            else:
+                preferences_text = preferences
+
+        if not preferences_text:
+            preferences_text = "No specific preferences - plan a general tourism itinerary"
+
         # GOAL-BASED PROMPT (not prescriptive!)
         react_prompt = f"""You are planning a {trip_days}-day trip to {city_name} ({start_date} to {end_date}).
 
 USER PREFERENCES:
-{preferences or "No specific preferences - plan a general tourism itinerary"}
+{preferences_text}
 
 YOUR GOAL:
 Gather information needed to create a personalized itinerary.
@@ -562,7 +578,13 @@ THINK STEP-BY-STEP:
    - Nightlife → types="night_club,bar,tourist_attraction"
    - Culture → types="museum,art_gallery,tourist_attraction"
    - Mix types to match multiple interests
-4. ALWAYS call search_restaurants (people need to eat!)
+4. 🔴 CRITICAL - Call search_restaurants with cuisine preferences:
+   - If user mentioned specific cuisines (e.g., "Indian food", "Italian", "Chinese"):
+     * YOU MUST search for that specific cuisine (e.g., query="Indian restaurant")
+     * This is MANDATORY - don't ignore food preferences!
+   - If user mentioned dietary needs (vegetarian, vegan, halal):
+     * Include that in the query (e.g., query="vegetarian restaurant")
+   - If no food preferences stated, search for "restaurant" or "top rated restaurant"
 5. Check weather if trip is soon
 6. If budget exists, call search_hotels with amount
 
@@ -627,29 +649,36 @@ GATHERED DATA:
 
 TRIP: {city_name}, {trip_days} days ({start_date} to {end_date})
 TIME GRANULARITY: {time_instr}
-USER PREFERENCES: {preferences or "General tourism"}
+
+USER PREFERENCES (HIGHEST PRIORITY - YOU MUST MATCH THESE):
+{preferences_text}
 
 SECURITY: Use ONLY city "{city_name}"
 
 CRITICAL INSTRUCTIONS FOR ACTIVITY SELECTION:
-1. WEATHER ADAPTATION: If weather forecast shows rain/storms (e.g., "rain", "drizzle", "thunderstorm"):
-   - PRIORITIZE indoor activities: museums, restaurants, shopping centers, theaters, aquariums, galleries, indoor parks
+
+🔴 RULE #1 - USER PREFERENCES ARE MANDATORY:
+   - The user's stated preferences (profile interests + additional notes) are THE MOST IMPORTANT factor
+   - If user mentions food preferences (e.g., "Indian food", "vegetarian", "Italian cuisine"):
+     * YOU MUST include restaurants that match those preferences in restaurant_indices
+     * Prioritize those cuisines in the daily schedule
+     * Mention them prominently in your reasoning
+   - If user mentions activity types (e.g., "beaches", "nightlife", "museums"):
+     * YOU MUST select attractions that match those types
+     * Build the entire itinerary around those interests
+   - If user mentions budget/accommodation preferences:
+     * Respect those constraints completely
+   - NEVER ignore what the user explicitly asked for!
+
+2. WEATHER ADAPTATION (Secondary to user preferences):
+   - If weather forecast shows rain/storms: PRIORITIZE indoor activities
    - Still include some outdoor options but ensure majority are sheltered/indoor
-   - In optional_activities, ALWAYS include at least 2 indoor alternatives (museum, mall, gallery, theater, aquarium, etc.)
+   - In optional_activities, include at least 2 indoor alternatives
 
-2. PREFERENCE MATCHING:
-   - Check if selected attractions/restaurants match user preferences
-   - If there's a mismatch (e.g., user wants "family-friendly" but results are nightclubs, or user wants "nightlife" but results are museums):
-     - Balance with activities that match stated preferences
-     - In optional_activities, include 2-3 activities that better align with user preferences
-     - ALWAYS suggest indoor options as fallbacks
-
-3. DIVERSITY: Include mix of:
-   - Outdoor attractions (if weather permits)
-   - Indoor entertainment (museums, galleries, shopping, restaurants)
-   - Natural/parks (if not raining)
-   - Cultural experiences
-   - Dining experiences
+3. DIVERSITY (Only after satisfying preferences):
+   - Include mix of activities WITHIN the user's stated interests
+   - Don't add random activities that don't match preferences
+   - Every choice should tie back to what the user wants
 
 CREATE ITINERARY:
 - hotel_index: number or null (if no hotels searched)
@@ -660,12 +689,10 @@ CREATE ITINERARY:
   * Adapt activity types based on weather (more indoor if rainy)
 - optional_activities: [2-4 alternatives - include indoor/covered options as fallbacks]
 - estimated_total: Estimated total trip cost as "$XXXX-$XXXX" format (e.g., "$1200-$1500" for flights, hotel, food, activities combined). Return null if no budget/hotel data available. IMPORTANT: Use actual dollar amounts, not placeholder symbols!
-- reasoning: Explain WHY you created this itinerary and HOW it considers the user's interests. Include:
-  * How the selected activities match the user's preferences (e.g., "Your preference for nightlife is reflected in the evening activities at clubs and bars")
-  * Why specific accommodations/restaurants were chosen
-  * How weather influenced the activity selection (if applicable)
-  * Any compromises or trade-offs made (e.g., "We balanced your budget constraint with premium dining experiences")
-  * Make it personal and show understanding of what the user wants
+- reasoning: Write a concise 2-3 sentence summary (MAX 400 characters) that DIRECTLY addresses how you matched the user's stated preferences. Be specific and complete your thought. Examples:
+  * "This itinerary focuses on Boston's museums and galleries to match your art preferences. The included Indian restaurants (Masala Art, Curry Point) satisfy your cuisine request, while indoor activities accommodate the rainy forecast."
+  * "Your beach and nightlife preferences drive this Miami plan. Days feature South Beach relaxation, evenings showcase club scenes you requested, with Italian dining at your preferred restaurants, all within your $2000 budget."
+  🔴 CRITICAL: Always mention specific preferences you matched (cuisine types, activity types, budget, etc.). Keep under 400 characters with COMPLETE sentences (no trailing off)
 """
 
         logger.info("Configuring LLM with structured output schema (ItineraryPlanLLM)...")
@@ -781,10 +808,15 @@ CREATE ITINERARY:
 
         logger.info(f"  ✓ Estimated total: {plan.estimated_total or 'N/A'}")
 
+        # Limit AI reasoning to 400 characters for better UX
+        reasoning = plan.reasoning or ""
+        if len(reasoning) > 400:
+            reasoning = reasoning[:397] + "..."
+
         return Itinerary(
             hotel=hotel,
             daily_plans=daily_plans,
             optional_activities=plan.optional_activities,
             estimated_total=plan.estimated_total,
-            ai_reasoning=plan.reasoning
+            ai_reasoning=reasoning
         )

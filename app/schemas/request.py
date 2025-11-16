@@ -1,6 +1,6 @@
 """Request schemas for API endpoints"""
 from datetime import date, timedelta
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -64,7 +64,11 @@ class GenerateItineraryRequest(BaseModel):
         None,
         min_length=1,
         max_length=500,
-        description="Unstructured preferences (e.g., 'I love nightlife and have $1500 budget')"
+        description="Additional notes like budget, dietary restrictions, etc."
+    )
+    user_preferences: Optional[List[str]] = Field(
+        None,
+        description="User's saved profile preferences (e.g., ['outdoor', 'beaches', 'nightlife'])"
     )
 
     @field_validator("preferences")
@@ -108,7 +112,8 @@ class GenerateItineraryRequest(BaseModel):
                     "start": "2025-11-01",
                     "end": "2025-11-05"
                 },
-                "preferences": "I love nightlife and have $1500 budget for hotels"
+                "preferences": "Budget is $1500 for hotels, prefer vegetarian food",
+                "user_preferences": ["beaches", "nightlife", "outdoor", "relaxation"]
             }
         }
 

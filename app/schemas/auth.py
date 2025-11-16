@@ -1,5 +1,6 @@
 """Authentication schemas for requests and responses"""
 from pydantic import BaseModel, EmailStr, Field, validator
+from typing import Optional, List
 import re
 
 
@@ -42,6 +43,8 @@ class UserResponse(BaseModel):
     name: str
     email: str
     created_at: str
+    preferences: Optional[List[str]] = []
+    profile_image_url: Optional[str] = None
 
     class Config:
         from_attributes = True

@@ -21,7 +21,7 @@ from .agents.travel_agent import TravelAgent
 from .utils.content_safety import ContentSafetyError
 from .utils.rate_limiter import InMemoryRateLimiter
 from .utils.auth import hash_password, verify_password, create_access_token, get_token_expiry_seconds
-from .utils.database import create_user, get_user_by_email, create_itinerary, get_user_itineraries, get_itinerary_by_id, update_user_preferences
+from .utils.database import create_user, get_user_by_email, get_user_by_id, create_itinerary, get_user_itineraries, get_itinerary_by_id, update_user_preferences
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.timeout import CustomTimeoutMiddleware
 from .middleware.auth import require_auth
@@ -117,7 +117,9 @@ async def register(request: UserRegisterRequest, response: Response):
             id=user_data["id"],
             name=user_data["name"],
             email=user_data["email"],
-            created_at=user_data["created_at"]
+            created_at=user_data["created_at"],
+            preferences=user_data.get("preferences", []),
+            profile_image_url=user_data.get("profile_image_url")
         )
 
     except ValueError as e:
@@ -209,7 +211,9 @@ async def login(request: UserLoginRequest, response: Response):
             id=user_data["id"],
             name=user_data["name"],
             email=user_data["email"],
-            created_at=user_data["created_at"]
+            created_at=user_data["created_at"],
+            preferences=user_data.get("preferences", []),
+            profile_image_url=user_data.get("profile_image_url")
         )
 
     except HTTPException:
@@ -240,6 +244,58 @@ async def logout(response: Response):
     """
     response.delete_cookie(key="access_token")
     return {"message": "Successfully logged out"}
+
+
+@app.get("/user/profile")
+async def get_profile(
+    user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Get current user's profile data
+
+    Args:
+        user: Current authenticated user
+
+    Returns:
+        User profile data including preferences
+
+    Raises:
+        HTTPException: If retrieval fails
+    """
+    try:
+        # Fetch fresh user data from database
+        user_data = await get_user_by_id(user["id"])
+
+        if not user_data:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "NotFound",
+                    "message": "User not found",
+                    "details": {}
+                }
+            )
+
+        return UserResponse(
+            id=user_data["id"],
+            name=user_data["name"],
+            email=user_data["email"],
+            created_at=user_data["created_at"],
+            preferences=user_data.get("preferences", []),
+            profile_image_url=user_data.get("profile_image_url")
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to fetch profile",
+                "details": {"original_error": str(e)}
+            }
+        )
 
 
 @app.put("/user/preferences")
@@ -365,7 +421,8 @@ async def generate_itinerary(
             longitude=request.city.longitude,
             start_date=request.dates.start,
             end_date=request.dates.end,
-            preferences=request.preferences
+            preferences=request.preferences,
+            user_preferences=request.user_preferences
         )
 
         # NOTE: Itinerary is NOT auto-saved to database
