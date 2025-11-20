@@ -63,40 +63,18 @@ app.add_middleware(
 # Helper function for RAG indexing
 def extract_itinerary_summary(itinerary_data: Dict[str, Any]) -> str:
     """
-    Extract a concise summary from itinerary_data for RAG indexing.
+    Extract summary for RAG - just return empty string.
+
+    We only embed: city + preferences + optional feedback.
+    No need for itinerary summary since it doesn't match user queries.
 
     Args:
-        itinerary_data: Complete itinerary JSON
+        itinerary_data: Complete itinerary JSON (unused)
 
     Returns:
-        Text summary of activities and highlights
+        Empty string
     """
-    summary_parts = []
-
-    # Extract daily activities
-    daily_plans = itinerary_data.get("daily_plans", [])
-    for day in daily_plans[:3]:  # First 3 days for brevity
-        activities = day.get("activities", [])
-        for activity in activities[:3]:  # Top 3 activities per day
-            venue = activity.get("venue", "")  # FIXED: use 'venue' not 'name'
-            if venue:
-                summary_parts.append(venue)
-
-    # Extract optional activities
-    optional_activities = itinerary_data.get("optional_activities", [])
-    for activity in optional_activities[:3]:  # Top 3 optional
-        venue = activity.get("venue", "")  # FIXED: use 'venue' not 'name'
-        if venue and venue not in " ".join(summary_parts):
-            summary_parts.append(venue)
-
-    # Extract hotel if present
-    hotel = itinerary_data.get("hotel")
-    if hotel and isinstance(hotel, dict):
-        hotel_name = hotel.get("name", "")
-        if hotel_name:
-            summary_parts.append(f"stayed at {hotel_name}")
-
-    return ", ".join(summary_parts) if summary_parts else "Various activities and experiences"
+    return ""
 
 
 @app.get("/")
@@ -823,7 +801,25 @@ async def submit_feedback(
                 # Content safety check before indexing to RAG
                 from .utils.content_safety import check_content_safety, ContentSafetyError
 
-                text_to_check = f"{itinerary.get('preferences', '')} {feedback.feedback_text or ''}"
+                # Get user preferences from users table
+                user_preferences_array = current_user.get("preferences", [])
+
+                # Format as natural language sentence for better semantic matching
+                if user_preferences_array:
+                    if len(user_preferences_array) == 1:
+                        user_preferences_text = f"I enjoy {user_preferences_array[0]}"
+                    elif len(user_preferences_array) == 2:
+                        user_preferences_text = f"I enjoy {user_preferences_array[0]} and {user_preferences_array[1]}"
+                    else:
+                        user_preferences_text = f"I enjoy {', '.join(user_preferences_array[:-1])}, and {user_preferences_array[-1]}"
+                else:
+                    user_preferences_text = ""
+
+                # Combine all text fields for embedding
+                itinerary_prefs = itinerary.get('preferences', '').strip()
+                combined_preferences = f"{itinerary_prefs}. {user_preferences_text}".strip() if user_preferences_text else itinerary_prefs
+
+                text_to_check = f"{combined_preferences} {feedback.feedback_text or ''}"
 
                 try:
                     check_content_safety(text_to_check)
@@ -839,7 +835,7 @@ async def submit_feedback(
                         city=itinerary["city"],
                         start_date=str(itinerary["start_date"]),
                         end_date=str(itinerary["end_date"]),
-                        preferences=itinerary.get("preferences", ""),
+                        preferences=combined_preferences,
                         itinerary_summary=itinerary_summary,
                         rating=feedback.rating,
                         feedback_text=feedback.feedback_text
