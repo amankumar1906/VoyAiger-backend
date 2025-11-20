@@ -1,36 +1,37 @@
 """
-Embedding generation module for RAG system.
+Embedding generation module for RAG system using Cohere API.
 
-This module handles text-to-vector conversion using SentenceTransformer models.
-Uses all-mpnet-base-v2 (768 dimensions) for high-quality semantic embeddings.
+This module handles text-to-vector conversion using Cohere's embedding models.
+Uses embed-english-v3.0 (1024 dimensions) - free tier available.
 """
 
 import logging
 from typing import List, Optional
 from functools import lru_cache
-
-from sentence_transformers import SentenceTransformer
+import cohere
 
 logger = logging.getLogger(__name__)
 
 
 class EmbeddingModel:
     """
-    Wrapper for SentenceTransformer embedding model with caching.
+    Wrapper for Cohere embedding API.
 
     Features:
-    - Lazy loading (model loaded on first use)
-    - Singleton pattern (one model instance per process)
+    - API-based embeddings (no heavy model downloads)
     - Batch processing support
-    - Automatic normalization for cosine similarity
+    - Free tier: 100 requests/minute
+    - 1024-dimensional embeddings
     """
 
     _instance: Optional['EmbeddingModel'] = None
-    _model: Optional[SentenceTransformer] = None
+    _client: Optional[cohere.Client] = None
 
     # Model configuration
-    MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
-    EMBEDDING_DIMENSION = 768
+    MODEL_NAME = "embed-english-v3.0"
+    EMBEDDING_DIMENSION = 1024
+    INPUT_TYPE = "search_document"  # For indexing
+    QUERY_INPUT_TYPE = "search_query"  # For retrieval
 
     def __new__(cls):
         """Singleton pattern - only one instance per process."""
@@ -39,26 +40,33 @@ class EmbeddingModel:
         return cls._instance
 
     def __init__(self):
-        """Initialize embedding model (lazy loaded)."""
-        if self._model is None:
-            logger.info(f"Loading embedding model: {self.MODEL_NAME}")
-            try:
-                # Load model with CPU/GPU auto-detection
-                self._model = SentenceTransformer(self.MODEL_NAME)
-                logger.info(f"Embedding model loaded successfully. Dimension: {self.EMBEDDING_DIMENSION}")
-            except Exception as e:
-                logger.error(f"Failed to load embedding model: {e}")
-                raise RuntimeError(f"Could not load embedding model: {e}") from e
+        """Initialize Cohere client (loads API key from settings)."""
+        if self._client is None:
+            from ..config import settings
+            api_key = settings.cohere_api_key
 
-    def embed_text(self, text: str) -> List[float]:
+            if not api_key:
+                raise ValueError("Cohere API key is required. Set COHERE_API_KEY in environment.")
+
+            logger.info(f"Initializing Cohere client with model: {self.MODEL_NAME}")
+            try:
+                # Cohere v5 uses positional argument, not keyword
+                self._client = cohere.Client(api_key)
+                logger.info(f"Cohere client initialized. Dimension: {self.EMBEDDING_DIMENSION}")
+            except Exception as e:
+                logger.error(f"Failed to initialize Cohere client: {e}")
+                raise RuntimeError(f"Could not initialize Cohere client: {e}") from e
+
+    def embed_text(self, text: str, input_type: str = "search_document") -> List[float]:
         """
         Generate embedding for a single text.
 
         Args:
             text: Input text to embed
+            input_type: "search_document" for indexing, "search_query" for retrieval
 
         Returns:
-            List of 768 float values (normalized for cosine similarity)
+            List of 1024 float values
 
         Raises:
             ValueError: If text is empty
@@ -68,30 +76,33 @@ class EmbeddingModel:
             raise ValueError("Cannot embed empty text")
 
         try:
-            # Generate embedding (automatically normalized by the model)
-            embedding = self._model.encode(
-                text,
-                normalize_embeddings=True,  # Normalize for cosine similarity
-                show_progress_bar=False
+            # Call Cohere API
+            response = self._client.embed(
+                texts=[text],
+                model=self.MODEL_NAME,
+                input_type=input_type,
+                embedding_types=["float"]
             )
 
-            # Convert numpy array to Python list
-            return embedding.tolist()
+            # Extract embedding
+            embedding = response.embeddings.float[0]
+            return embedding
 
         except Exception as e:
             logger.error(f"Failed to generate embedding: {e}")
             raise RuntimeError(f"Embedding generation failed: {e}") from e
 
-    def embed_batch(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
+    def embed_batch(self, texts: List[str], input_type: str = "search_document", batch_size: int = 96) -> List[List[float]]:
         """
         Generate embeddings for multiple texts efficiently.
 
         Args:
             texts: List of input texts
-            batch_size: Number of texts to process at once
+            input_type: "search_document" for indexing, "search_query" for retrieval
+            batch_size: Number of texts to process at once (Cohere max: 96)
 
         Returns:
-            List of embeddings (each is a list of 768 floats)
+            List of embeddings (each is a list of 1024 floats)
 
         Raises:
             ValueError: If texts list is empty
@@ -106,17 +117,22 @@ class EmbeddingModel:
             raise ValueError("All texts are empty")
 
         try:
-            # Batch encode for efficiency
-            embeddings = self._model.encode(
-                valid_texts,
-                batch_size=batch_size,
-                normalize_embeddings=True,
-                show_progress_bar=False,
-                convert_to_numpy=True
-            )
+            all_embeddings = []
 
-            # Convert to list of lists
-            return [emb.tolist() for emb in embeddings]
+            # Process in batches (Cohere limit: 96 texts per request)
+            for i in range(0, len(valid_texts), batch_size):
+                batch = valid_texts[i:i + batch_size]
+
+                response = self._client.embed(
+                    texts=batch,
+                    model=self.MODEL_NAME,
+                    input_type=input_type,
+                    embedding_types=["float"]
+                )
+
+                all_embeddings.extend(response.embeddings.float)
+
+            return all_embeddings
 
         except Exception as e:
             logger.error(f"Failed to generate batch embeddings: {e}")
@@ -154,7 +170,7 @@ def get_cached_embedding(text: str) -> List[float]:
         Only cache immutable strings.
     """
     model = EmbeddingModel()
-    return model.embed_text(text)
+    return model.embed_text(text, input_type="search_query")
 
 
 def create_document_text(
@@ -229,9 +245,12 @@ def create_query_text(city: str, preferences: str) -> str:
 _embedding_model: Optional[EmbeddingModel] = None
 
 
-def get_embedding_model() -> EmbeddingModel:
+def get_embedding_model(api_key: Optional[str] = None) -> EmbeddingModel:
     """
     Get global embedding model instance.
+
+    Args:
+        api_key: Optional Cohere API key (ignored, uses settings)
 
     Returns:
         Singleton EmbeddingModel instance

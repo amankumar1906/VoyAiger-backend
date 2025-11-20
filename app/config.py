@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = Field(..., alias="GEMINI_API_KEY")
     google_places_api_key: str = Field(..., alias="GOOGLE_PLACES_API_KEY")
     xotelo_api_key: str = Field(..., alias="XOTELO_API_KEY")
+    cohere_api_key: str = Field(..., alias="COHERE_API_KEY")
 
     # Supabase Configuration
     supabase_url: str = Field(..., alias="SUPABASE_URL")

@@ -191,8 +191,8 @@ class RAGRetriever:
             # Create query text
             query_text = create_query_text(city=city, preferences=preferences)
 
-            # Generate query embedding
-            query_embedding = self.embedding_model.embed_text(query_text)
+            # Generate query embedding (use "search_query" input type for retrieval)
+            query_embedding = self.embedding_model.embed_text(query_text, input_type="search_query")
 
             # Perform similarity search
             filter_city = city if same_city_only else None
@@ -204,10 +204,10 @@ class RAGRetriever:
                 min_similarity=min_similarity
             )
 
-            logger.info(
-                f"Retrieved {len(similar_docs)} similar trips for user_id={user_id}, "
-                f"city={city}, same_city_only={same_city_only}"
-            )
+            if similar_docs:
+                logger.info(f"✓ RAG: Retrieved {len(similar_docs)} similar trips for {city}")
+            else:
+                logger.info(f"RAG: No similar trips found for {city}")
 
             return similar_docs
 
