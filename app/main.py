@@ -29,7 +29,6 @@ from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.timeout import CustomTimeoutMiddleware
 from .middleware.auth import require_auth
 from .config import settings
-from .rag import get_retriever
 
 logger = logging.getLogger(__name__)
 
@@ -102,11 +101,13 @@ def extract_itinerary_summary(itinerary_data: Dict[str, Any]) -> str:
 
 
 @app.get("/")
+@app.head("/")
 async def root():
     """Health check endpoint"""
     return {"status": "ok", "message": "VoyAIger API is running"}
 
 @app.get("/health")
+@app.head("/health")
 async def health():
     """Health check endpoint"""
     return {"status": "healthy"}
@@ -816,6 +817,7 @@ async def submit_feedback(
 
         # RAG Integration: Index high-rated itineraries (≥4 stars)
         try:
+            from .rag import get_retriever
             retriever = get_retriever()
 
             if feedback.rating >= 4:
@@ -973,6 +975,7 @@ async def remove_feedback(
 
         # RAG Integration: Remove from index before deleting feedback
         try:
+            from .rag import get_retriever
             retriever = get_retriever()
             await retriever.remove_itinerary_feedback(UUID(feedback["id"]))
             logger.info(f"Removed itinerary {itinerary_id} from RAG index on feedback deletion")

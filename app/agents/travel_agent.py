@@ -21,7 +21,6 @@ from ..tools.weather_api import WeatherAPI
 from ..schemas.response import Itinerary, Hotel, DayPlan
 from ..schemas.agent import ItineraryPlanLLM
 from ..utils.content_safety import check_content_safety, configure_safety_settings, safe_llm_call
-from ..rag import get_retriever
 from uuid import UUID
 
 # Configure logging
@@ -643,6 +642,7 @@ Call the tools now to gather data.
         rag_context = ""
         if user_id:
             try:
+                from ..rag import get_retriever
                 retriever = get_retriever()
                 rag_context = await retriever.get_personalization_context(
                     user_id=UUID(user_id),
