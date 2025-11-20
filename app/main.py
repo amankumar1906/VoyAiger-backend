@@ -74,28 +74,27 @@ def extract_itinerary_summary(itinerary_data: Dict[str, Any]) -> str:
     summary_parts = []
 
     # Extract daily activities
-    daily_schedule = itinerary_data.get("daily_schedule", [])
-    for day in daily_schedule[:3]:  # First 3 days for brevity
+    daily_plans = itinerary_data.get("daily_plans", [])
+    for day in daily_plans[:3]:  # First 3 days for brevity
         activities = day.get("activities", [])
-        for activity in activities[:2]:  # Top 2 activities per day
-            name = activity.get("name", "")
-            category = activity.get("category", "")
-            if name:
-                summary_parts.append(f"{name} ({category})" if category else name)
+        for activity in activities[:3]:  # Top 3 activities per day
+            venue = activity.get("venue", "")  # FIXED: use 'venue' not 'name'
+            if venue:
+                summary_parts.append(venue)
 
-    # Extract selected attractions
-    attractions = itinerary_data.get("selected_attractions", [])
-    for attraction in attractions[:5]:  # Top 5 attractions
-        name = attraction.get("name", "")
-        if name and name not in " ".join(summary_parts):
-            summary_parts.append(name)
+    # Extract optional activities
+    optional_activities = itinerary_data.get("optional_activities", [])
+    for activity in optional_activities[:3]:  # Top 3 optional
+        venue = activity.get("venue", "")  # FIXED: use 'venue' not 'name'
+        if venue and venue not in " ".join(summary_parts):
+            summary_parts.append(venue)
 
-    # Extract selected restaurants
-    restaurants = itinerary_data.get("selected_restaurants", [])
-    for restaurant in restaurants[:3]:  # Top 3 restaurants
-        name = restaurant.get("name", "")
-        if name and name not in " ".join(summary_parts):
-            summary_parts.append(name)
+    # Extract hotel if present
+    hotel = itinerary_data.get("hotel")
+    if hotel and isinstance(hotel, dict):
+        hotel_name = hotel.get("name", "")
+        if hotel_name:
+            summary_parts.append(f"stayed at {hotel_name}")
 
     return ", ".join(summary_parts) if summary_parts else "Various activities and experiences"
 
