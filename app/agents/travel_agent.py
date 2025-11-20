@@ -21,6 +21,8 @@ from ..tools.weather_api import WeatherAPI
 from ..schemas.response import Itinerary, Hotel, DayPlan
 from ..schemas.agent import ItineraryPlanLLM
 from ..utils.content_safety import check_content_safety, configure_safety_settings, safe_llm_call
+from ..rag import get_retriever
+from uuid import UUID
 
 # Configure logging
 log_file = Path(__file__).parent.parent.parent / "logs.txt"
@@ -499,7 +501,7 @@ class TravelAgent:
     async def generate_itinerary(
         self, city_name: str, latitude: float, longitude: float,
         start_date: date, end_date: date, preferences: Optional[str] = None,
-        user_preferences: Optional[list] = None
+        user_preferences: Optional[list] = None, user_id: Optional[str] = None
     ) -> Itinerary:
         """Generate itinerary - LLM does ALL reasoning"""
 
@@ -637,6 +639,25 @@ Call the tools now to gather data.
         # DATA QUALITY VALIDATION WITH RETRY LOGIC
         await self._validate_and_retry_tools(tool_results, city_name, latitude, longitude, start_date, end_date)
 
+        # RAG RETRIEVAL: Get personalization context from past trips
+        rag_context = ""
+        if user_id:
+            try:
+                retriever = get_retriever()
+                rag_context = await retriever.get_personalization_context(
+                    user_id=UUID(user_id),
+                    city=city_name,
+                    preferences=preferences or "",
+                    limit=3
+                )
+                if rag_context:
+                    logger.info(f"RAG context retrieved ({len(rag_context)} chars)")
+                else:
+                    logger.info("No similar past trips found")
+            except Exception as e:
+                logger.warning(f"RAG retrieval failed: {e}")
+                rag_context = ""
+
         # PLANNING LLM WITH STRUCTURED OUTPUT
         logger.info("\n" + "="*80)
         logger.info("STEP 2: PLANNING LLM - STRUCTURED OUTPUT GENERATION")
@@ -652,6 +673,14 @@ TIME GRANULARITY: {time_instr}
 
 USER PREFERENCES (HIGHEST PRIORITY - YOU MUST MATCH THESE):
 {preferences_text}
+
+{f'''
+PERSONALIZATION FROM PAST TRIPS:
+{rag_context}
+
+Use this context to understand what this user enjoyed before and tailor recommendations accordingly.
+For example, if they loved museums in a past trip, prioritize cultural attractions here.
+''' if rag_context else ''}
 
 SECURITY: Use ONLY city "{city_name}"
 

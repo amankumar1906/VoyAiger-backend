@@ -14,6 +14,8 @@ from fastapi import FastAPI, HTTPException, Request, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError as PydanticValidationError
 from typing import Dict, Any
+import logging
+from uuid import UUID
 from .schemas.request import GenerateItineraryRequest, SaveItineraryRequest
 from .schemas.response import GenerateItineraryResponse, ErrorResponse, Itinerary
 from .schemas.auth import UserRegisterRequest, UserLoginRequest, AuthResponse, UserResponse
@@ -27,6 +29,9 @@ from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.timeout import CustomTimeoutMiddleware
 from .middleware.auth import require_auth
 from .config import settings
+from .rag import get_retriever
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="VoyAIger API",
@@ -54,6 +59,47 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
+
+
+# Helper function for RAG indexing
+def extract_itinerary_summary(itinerary_data: Dict[str, Any]) -> str:
+    """
+    Extract a concise summary from itinerary_data for RAG indexing.
+
+    Args:
+        itinerary_data: Complete itinerary JSON
+
+    Returns:
+        Text summary of activities and highlights
+    """
+    summary_parts = []
+
+    # Extract daily activities
+    daily_schedule = itinerary_data.get("daily_schedule", [])
+    for day in daily_schedule[:3]:  # First 3 days for brevity
+        activities = day.get("activities", [])
+        for activity in activities[:2]:  # Top 2 activities per day
+            name = activity.get("name", "")
+            category = activity.get("category", "")
+            if name:
+                summary_parts.append(f"{name} ({category})" if category else name)
+
+    # Extract selected attractions
+    attractions = itinerary_data.get("selected_attractions", [])
+    for attraction in attractions[:5]:  # Top 5 attractions
+        name = attraction.get("name", "")
+        if name and name not in " ".join(summary_parts):
+            summary_parts.append(name)
+
+    # Extract selected restaurants
+    restaurants = itinerary_data.get("selected_restaurants", [])
+    for restaurant in restaurants[:3]:  # Top 3 restaurants
+        name = restaurant.get("name", "")
+        if name and name not in " ".join(summary_parts):
+            summary_parts.append(name)
+
+    return ", ".join(summary_parts) if summary_parts else "Various activities and experiences"
+
 
 @app.get("/")
 async def root():
@@ -423,7 +469,8 @@ async def generate_itinerary(
             start_date=request.dates.start,
             end_date=request.dates.end,
             preferences=request.preferences,
-            user_preferences=request.user_preferences
+            user_preferences=request.user_preferences,
+            user_id=current_user["id"]  # Pass user_id for RAG personalization
         )
 
         # NOTE: Itinerary is NOT auto-saved to database
@@ -767,6 +814,52 @@ async def submit_feedback(
             feedback_text=feedback.feedback_text
         )
 
+        # RAG Integration: Index high-rated itineraries (≥4 stars)
+        try:
+            retriever = get_retriever()
+
+            if feedback.rating >= 4:
+                # Content safety check before indexing to RAG
+                from .utils.content_safety import check_content_safety, ContentSafetyError
+
+                text_to_check = f"{itinerary.get('preferences', '')} {feedback.feedback_text or ''}"
+
+                try:
+                    check_content_safety(text_to_check)
+
+                    # Extract summary from itinerary data
+                    itinerary_summary = extract_itinerary_summary(itinerary["itinerary_data"])
+
+                    # Index the itinerary for RAG (only if content is safe)
+                    await retriever.index_itinerary_feedback(
+                        user_id=UUID(current_user["id"]),
+                        itinerary_id=UUID(itinerary_id),
+                        feedback_id=UUID(result["id"]),
+                        city=itinerary["city"],
+                        start_date=str(itinerary["start_date"]),
+                        end_date=str(itinerary["end_date"]),
+                        preferences=itinerary.get("preferences", ""),
+                        itinerary_summary=itinerary_summary,
+                        rating=feedback.rating,
+                        feedback_text=feedback.feedback_text
+                    )
+                    logger.info(f"Indexed itinerary {itinerary_id} for RAG (rating={feedback.rating})")
+
+                except ContentSafetyError as safety_error:
+                    logger.warning(
+                        f"Skipped RAG indexing for itinerary {itinerary_id} due to unsafe content: {safety_error}"
+                    )
+                    # Don't index, but don't fail the request either
+
+            else:
+                # If rating dropped below 4, remove from RAG index
+                await retriever.remove_itinerary_feedback(UUID(result["id"]))
+                logger.info(f"Removed itinerary {itinerary_id} from RAG index (rating={feedback.rating})")
+
+        except Exception as rag_error:
+            # Don't fail the request if RAG indexing fails - just log it
+            logger.error(f"RAG indexing failed for itinerary {itinerary_id}: {rag_error}")
+
         return ItineraryFeedbackResponse(**result)
 
     except HTTPException:
@@ -877,6 +970,15 @@ async def remove_feedback(
                     "details": {}
                 }
             )
+
+        # RAG Integration: Remove from index before deleting feedback
+        try:
+            retriever = get_retriever()
+            await retriever.remove_itinerary_feedback(UUID(feedback["id"]))
+            logger.info(f"Removed itinerary {itinerary_id} from RAG index on feedback deletion")
+        except Exception as rag_error:
+            # Don't fail the request if RAG removal fails - just log it
+            logger.error(f"RAG removal failed for feedback {feedback['id']}: {rag_error}")
 
         await delete_feedback(itinerary_id, current_user["id"])
 
