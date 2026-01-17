@@ -148,3 +148,23 @@ class SaveItineraryRequest(BaseModel):
                 }
             }
         }
+
+
+class UpdateItineraryItemRequest(BaseModel):
+    """Request body for updating a specific item within a day"""
+    time: Optional[str] = Field(None, description="Time of activity (e.g., '9:00 AM', 'Lunch', 'Evening')")
+    venue: Optional[str] = Field(None, description="Name of the venue")
+    address: Optional[str] = Field(None, description="Address of the venue")
+    price_display: Optional[str] = Field(None, description="Price display (Free, $, $$, $$$, $$$$)")
+    notes: Optional[str] = Field(None, description="Additional notes about the activity")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "time": "10:00 AM",
+                "venue": "South Beach",
+                "address": "1001 Ocean Dr, Miami Beach, FL 33139",
+                "price_display": "Free",
+                "notes": "Enjoy the beautiful beach and sunshine"
+            }
+        }

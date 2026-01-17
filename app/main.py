@@ -16,7 +16,7 @@ from pydantic import ValidationError as PydanticValidationError
 from typing import Dict, Any
 import logging
 from uuid import UUID
-from .schemas.request import GenerateItineraryRequest, SaveItineraryRequest
+from .schemas.request import GenerateItineraryRequest, SaveItineraryRequest, UpdateItineraryItemRequest
 from .schemas.response import GenerateItineraryResponse, ErrorResponse, Itinerary
 from .schemas.auth import UserRegisterRequest, UserLoginRequest, AuthResponse, UserResponse
 from .models.feedback import ItineraryFeedbackCreate, ItineraryFeedbackResponse
@@ -24,7 +24,7 @@ from .agents.travel_agent import TravelAgent
 from .utils.content_safety import ContentSafetyError
 from .utils.rate_limiter import InMemoryRateLimiter
 from .utils.auth import hash_password, verify_password, create_access_token, get_token_expiry_seconds
-from .utils.database import create_user, get_user_by_email, get_user_by_id, create_itinerary, get_user_itineraries, get_itinerary_by_id, delete_itinerary, update_user_preferences, create_or_update_feedback, get_feedback_by_itinerary, delete_feedback
+from .utils.database import create_user, get_user_by_email, get_user_by_id, create_itinerary, get_user_itineraries, get_itinerary_by_id, delete_itinerary, update_user_preferences, create_or_update_feedback, get_feedback_by_itinerary, delete_feedback, update_itinerary_item
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.timeout import CustomTimeoutMiddleware
 from .middleware.auth import require_auth
@@ -733,6 +733,89 @@ async def delete_user_itinerary(
             detail={
                 "error": "InternalServerError",
                 "message": "Failed to delete itinerary",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+@app.patch(
+    "/itineraries/{itinerary_id}/days/{day_number}/items/{activity_index}",
+    responses={
+        200: {"description": "Item updated successfully"},
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def update_day_item(
+    itinerary_id: str,
+    day_number: int,
+    activity_index: int,
+    request: UpdateItineraryItemRequest,
+    current_user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Update a specific item within a day's activities (must belong to authenticated user)
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        day_number: Day number (1-indexed)
+        activity_index: Index of the activity within the day (0-indexed)
+        request: Updated item data (time, venue, address, etc.)
+        current_user: Authenticated user data from JWT token
+
+    Returns:
+        Updated itinerary data
+
+    Raises:
+        HTTPException: If not found, unauthorized, or update fails
+    """
+    try:
+        # Convert request to dict, excluding None values
+        updated_data = request.model_dump(exclude_none=True)
+
+        if not updated_data:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "BadRequest",
+                    "message": "At least one field must be provided to update",
+                    "details": {}
+                }
+            )
+
+        updated_itinerary = await update_itinerary_item(
+            itinerary_id=itinerary_id,
+            user_id=current_user["id"],
+            day_number=day_number,
+            activity_index=activity_index,
+            updated_item=updated_data
+        )
+
+        return {
+            "message": "Item updated successfully",
+            "itinerary": updated_itinerary
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "NotFound",
+                "message": str(e),
+                "details": {}
+            }
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to update item",
                 "details": {"original_error": str(e)}
             }
         )
