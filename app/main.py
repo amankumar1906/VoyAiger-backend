@@ -13,7 +13,7 @@ REFACTORED ARCHITECTURE:
 from fastapi import FastAPI, HTTPException, Request, Depends, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError as PydanticValidationError
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import logging
 from uuid import UUID
 from .schemas.request import GenerateItineraryRequest, SaveItineraryRequest, UpdateItineraryItemRequest
@@ -958,11 +958,10 @@ async def submit_feedback(
 
 @app.get(
     "/itineraries/{itinerary_id}/feedback",
-    response_model=ItineraryFeedbackResponse,
+    response_model=Optional[ItineraryFeedbackResponse],
     responses={
-        200: {"description": "Feedback retrieved successfully"},
+        200: {"description": "Feedback retrieved successfully (null if no feedback given yet)"},
         401: {"model": ErrorResponse},
-        404: {"model": ErrorResponse},
         500: {"model": ErrorResponse}
     }
 )
@@ -978,23 +977,18 @@ async def get_feedback(
         current_user: Authenticated user data from JWT token
 
     Returns:
-        Feedback data
+        Feedback data if exists, None if user hasn't provided feedback yet
 
     Raises:
-        HTTPException: If feedback not found
+        HTTPException: If there's an error retrieving feedback
     """
     try:
         feedback = await get_feedback_by_itinerary(itinerary_id, current_user["id"])
 
         if not feedback:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": "NotFound",
-                    "message": "No feedback found for this itinerary",
-                    "details": {}
-                }
-            )
+            # Return null/None to indicate no feedback has been given yet
+            # This is not an error condition - user simply hasn't provided feedback
+            return None
 
         return ItineraryFeedbackResponse(**feedback)
 
