@@ -168,3 +168,23 @@ class UpdateItineraryItemRequest(BaseModel):
                 "notes": "Enjoy the beautiful beach and sunshine"
             }
         }
+
+
+class AddActivityRequest(BaseModel):
+    """Request body for adding a new activity to a day"""
+    time: str = Field(..., description="Time of activity (e.g., '9:00 AM', 'Lunch', 'Evening')")
+    venue: str = Field(..., description="Name of the venue")
+    address: str = Field(..., description="Address of the venue")
+    price_display: str = Field(..., description="Price display (Free, $, $$, $$$, $$$$)")
+    notes: Optional[str] = Field(None, description="Additional notes about the activity")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "time": "3:00 PM",
+                "venue": "Art Deco Historic District",
+                "address": "Ocean Dr, Miami Beach, FL 33139",
+                "price_display": "Free",
+                "notes": "Walking tour of the historic Art Deco buildings"
+            }
+        }

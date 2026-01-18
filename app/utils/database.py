@@ -400,3 +400,125 @@ async def update_itinerary_item(
     if result.data:
         return result.data[0]
     raise Exception("Failed to update itinerary item")
+
+
+async def add_activity_to_day(
+    itinerary_id: str,
+    user_id: str,
+    day_number: int,
+    new_activity: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    Add a new activity to a specific day
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        user_id: UUID of the user (for ownership verification)
+        day_number: Day number (1-indexed)
+        new_activity: New activity data (time, venue, address, etc.)
+
+    Returns:
+        Updated itinerary data
+
+    Raises:
+        ValueError: If itinerary not found or day doesn't exist
+        Exception: If update fails
+    """
+    client = SupabaseClient.get_client()
+
+    # Get the existing itinerary
+    itinerary = await get_itinerary_by_id(itinerary_id, user_id)
+    if not itinerary:
+        raise ValueError("Itinerary not found or you don't have access to it")
+
+    # Get the itinerary data
+    itinerary_data = itinerary.get('itinerary_data', {})
+    daily_plans = itinerary_data.get('daily_plans', [])
+
+    # Find the day
+    day_plan = None
+    for day in daily_plans:
+        if day.get('day_number') == day_number:
+            day_plan = day
+            break
+
+    if not day_plan:
+        raise ValueError(f"Day {day_number} not found in itinerary")
+
+    # Add the new activity to the day's activities
+    activities = day_plan.get('activities', [])
+    activities.append(new_activity)
+
+    # Update the itinerary in the database
+    result = client.table('itineraries')\
+        .update({'itinerary_data': itinerary_data})\
+        .eq('id', itinerary_id)\
+        .eq('user_id', user_id)\
+        .execute()
+
+    if result.data:
+        return result.data[0]
+    raise Exception("Failed to add activity to day")
+
+
+async def delete_activity_from_day(
+    itinerary_id: str,
+    user_id: str,
+    day_number: int,
+    activity_index: int
+) -> Dict[str, Any]:
+    """
+    Delete a specific activity from a day
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        user_id: UUID of the user (for ownership verification)
+        day_number: Day number (1-indexed)
+        activity_index: Index of the activity within the day (0-indexed)
+
+    Returns:
+        Updated itinerary data
+
+    Raises:
+        ValueError: If itinerary not found or day/activity doesn't exist
+        Exception: If deletion fails
+    """
+    client = SupabaseClient.get_client()
+
+    # Get the existing itinerary
+    itinerary = await get_itinerary_by_id(itinerary_id, user_id)
+    if not itinerary:
+        raise ValueError("Itinerary not found or you don't have access to it")
+
+    # Get the itinerary data
+    itinerary_data = itinerary.get('itinerary_data', {})
+    daily_plans = itinerary_data.get('daily_plans', [])
+
+    # Find the day
+    day_plan = None
+    for day in daily_plans:
+        if day.get('day_number') == day_number:
+            day_plan = day
+            break
+
+    if not day_plan:
+        raise ValueError(f"Day {day_number} not found in itinerary")
+
+    # Validate activity index
+    activities = day_plan.get('activities', [])
+    if activity_index < 0 or activity_index >= len(activities):
+        raise ValueError(f"Activity index {activity_index} out of range for day {day_number}")
+
+    # Delete the activity
+    activities.pop(activity_index)
+
+    # Update the itinerary in the database
+    result = client.table('itineraries')\
+        .update({'itinerary_data': itinerary_data})\
+        .eq('id', itinerary_id)\
+        .eq('user_id', user_id)\
+        .execute()
+
+    if result.data:
+        return result.data[0]
+    raise Exception("Failed to delete activity from day")

@@ -16,7 +16,7 @@ from pydantic import ValidationError as PydanticValidationError
 from typing import Dict, Any, Optional
 import logging
 from uuid import UUID
-from .schemas.request import GenerateItineraryRequest, SaveItineraryRequest, UpdateItineraryItemRequest
+from .schemas.request import GenerateItineraryRequest, SaveItineraryRequest, UpdateItineraryItemRequest, AddActivityRequest
 from .schemas.response import GenerateItineraryResponse, ErrorResponse, Itinerary
 from .schemas.auth import UserRegisterRequest, UserLoginRequest, AuthResponse, UserResponse
 from .models.feedback import ItineraryFeedbackCreate, ItineraryFeedbackResponse
@@ -24,7 +24,7 @@ from .agents.travel_agent import TravelAgent
 from .utils.content_safety import ContentSafetyError
 from .utils.rate_limiter import InMemoryRateLimiter
 from .utils.auth import hash_password, verify_password, create_access_token, get_token_expiry_seconds
-from .utils.database import create_user, get_user_by_email, get_user_by_id, create_itinerary, get_user_itineraries, get_itinerary_by_id, delete_itinerary, update_user_preferences, create_or_update_feedback, get_feedback_by_itinerary, delete_feedback, update_itinerary_item
+from .utils.database import create_user, get_user_by_email, get_user_by_id, create_itinerary, get_user_itineraries, get_itinerary_by_id, delete_itinerary, update_user_preferences, create_or_update_feedback, get_feedback_by_itinerary, delete_feedback, update_itinerary_item, add_activity_to_day, delete_activity_from_day
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.timeout import CustomTimeoutMiddleware
 from .middleware.auth import require_auth
@@ -838,6 +838,144 @@ async def update_day_item(
             detail={
                 "error": "InternalServerError",
                 "message": "Failed to update item",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+@app.post(
+    "/itineraries/{itinerary_id}/days/{day_number}/activities",
+    responses={
+        201: {"description": "Activity added successfully"},
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    },
+    status_code=201
+)
+async def add_activity(
+    itinerary_id: str,
+    day_number: int,
+    request: AddActivityRequest,
+    current_user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Add a new activity to a specific day (must belong to authenticated user)
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        day_number: Day number (1-indexed)
+        request: New activity data (time, venue, address, etc.)
+        current_user: Authenticated user data from JWT token
+
+    Returns:
+        Updated itinerary data
+
+    Raises:
+        HTTPException: If not found, unauthorized, or addition fails
+    """
+    try:
+        # Convert request to dict
+        new_activity = request.model_dump()
+
+        updated_itinerary = await add_activity_to_day(
+            itinerary_id=itinerary_id,
+            user_id=current_user["id"],
+            day_number=day_number,
+            new_activity=new_activity
+        )
+
+        return {
+            "message": "Activity added successfully",
+            "itinerary": updated_itinerary
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "NotFound",
+                "message": str(e),
+                "details": {}
+            }
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to add activity",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+@app.delete(
+    "/itineraries/{itinerary_id}/days/{day_number}/activities/{activity_index}",
+    responses={
+        200: {"description": "Activity deleted successfully"},
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def delete_activity(
+    itinerary_id: str,
+    day_number: int,
+    activity_index: int,
+    current_user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Delete a specific activity from a day (must belong to authenticated user)
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        day_number: Day number (1-indexed)
+        activity_index: Index of the activity within the day (0-indexed)
+        current_user: Authenticated user data from JWT token
+
+    Returns:
+        Updated itinerary data
+
+    Raises:
+        HTTPException: If not found, unauthorized, or deletion fails
+    """
+    try:
+        updated_itinerary = await delete_activity_from_day(
+            itinerary_id=itinerary_id,
+            user_id=current_user["id"],
+            day_number=day_number,
+            activity_index=activity_index
+        )
+
+        return {
+            "message": "Activity deleted successfully",
+            "itinerary": updated_itinerary
+        }
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "NotFound",
+                "message": str(e),
+                "details": {}
+            }
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to delete activity",
                 "details": {"original_error": str(e)}
             }
         )
