@@ -10,7 +10,7 @@ REFACTORED ARCHITECTURE:
 - In-memory rate limiting (2 requests/minute per IP)
 - JWT-based authentication with Supabase (HttpOnly cookies)
 """
-from fastapi import FastAPI, HTTPException, Request, Depends, Response
+from fastapi import FastAPI, HTTPException, Request, Depends, Response, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import ValidationError as PydanticValidationError
 from typing import Dict, Any, Optional
@@ -24,7 +24,7 @@ from .agents.travel_agent import TravelAgent
 from .utils.content_safety import ContentSafetyError
 from .utils.rate_limiter import InMemoryRateLimiter
 from .utils.auth import hash_password, verify_password, create_access_token, get_token_expiry_seconds
-from .utils.database import create_user, get_user_by_email, get_user_by_id, create_itinerary, get_user_itineraries, get_itinerary_by_id, delete_itinerary, update_user_preferences, create_or_update_feedback, get_feedback_by_itinerary, delete_feedback, update_itinerary_item, add_activity_to_day, delete_activity_from_day
+from .utils.database import create_user, get_user_by_email, get_user_by_id, create_itinerary, get_user_itineraries, get_itinerary_by_id, delete_itinerary, update_user_preferences, update_profile_image, create_or_update_feedback, get_feedback_by_itinerary, delete_feedback, update_itinerary_item, add_activity_to_day, delete_activity_from_day
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.timeout import CustomTimeoutMiddleware
 from .middleware.auth import require_auth
@@ -387,7 +387,9 @@ async def update_preferences(
                 id=updated_user["id"],
                 name=updated_user["name"],
                 email=updated_user["email"],
-                created_at=updated_user["created_at"]
+                created_at=updated_user["created_at"],
+                preferences=updated_user.get("preferences", []),
+                profile_image_url=updated_user.get("profile_image_url")
             )
         }
     except HTTPException:
@@ -398,6 +400,98 @@ async def update_preferences(
             detail={
                 "error": "InternalServerError",
                 "message": "Failed to update preferences",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+@app.post("/user/profile-image")
+async def upload_profile_image(
+    file: UploadFile = File(...),
+    user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Upload user profile image to Supabase Storage
+
+    Args:
+        file: Image file to upload
+        user: Current authenticated user
+
+    Returns:
+        Success message with image URL
+
+    Raises:
+        HTTPException: If upload fails or file type is invalid
+    """
+    import uuid
+    from .utils.database import SupabaseClient
+
+    try:
+        # Validate file type
+        allowed_types = ["image/jpeg", "image/png", "image/jpg", "image/webp"]
+        if file.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "ValidationError",
+                    "message": "Invalid file type. Only JPEG, PNG, and WEBP images are allowed.",
+                    "details": {}
+                }
+            )
+
+        # Validate file size (max 5MB)
+        contents = await file.read()
+        if len(contents) > 5 * 1024 * 1024:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "ValidationError",
+                    "message": "File size too large. Maximum size is 5MB.",
+                    "details": {}
+                }
+            )
+
+        # Generate unique filename
+        file_ext = file.filename.split(".")[-1] if file.filename else "jpg"
+        unique_filename = f"{user['id']}/{uuid.uuid4()}.{file_ext}"
+
+        # Upload to Supabase Storage
+        client = SupabaseClient.get_client()
+
+        # Upload file to 'profile-images' bucket
+        storage_response = client.storage.from_("profile-images").upload(
+            unique_filename,
+            contents,
+            file_options={"content-type": file.content_type}
+        )
+
+        # Get public URL
+        public_url = client.storage.from_("profile-images").get_public_url(unique_filename)
+
+        # Update user's profile image URL in database
+        updated_user = await update_profile_image(user["id"], public_url)
+
+        return {
+            "message": "Profile image uploaded successfully",
+            "user": UserResponse(
+                id=updated_user["id"],
+                name=updated_user["name"],
+                email=updated_user["email"],
+                created_at=updated_user["created_at"],
+                preferences=updated_user.get("preferences", []),
+                profile_image_url=updated_user.get("profile_image_url")
+            )
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Profile image upload error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to upload profile image",
                 "details": {"original_error": str(e)}
             }
         )

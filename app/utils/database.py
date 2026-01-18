@@ -234,6 +234,31 @@ async def update_user_preferences(user_id: str, preferences: list) -> Dict[str, 
     raise Exception("Failed to update preferences")
 
 
+async def update_profile_image(user_id: str, image_url: str) -> Dict[str, Any]:
+    """
+    Update user's profile image URL
+
+    Args:
+        user_id: UUID of the user
+        image_url: URL of the uploaded image
+
+    Returns:
+        Updated user data
+
+    Raises:
+        Exception if update fails
+    """
+    client = SupabaseClient.get_client()
+    result = client.table('users')\
+        .update({'profile_image_url': image_url})\
+        .eq('id', user_id)\
+        .execute()
+
+    if result.data:
+        return result.data[0]
+    raise Exception("Failed to update profile image")
+
+
 # Feedback operations
 async def create_or_update_feedback(
     itinerary_id: str,
