@@ -173,6 +173,7 @@ class UpdateItineraryItemRequest(BaseModel):
 class AddActivityRequest(BaseModel):
     """Request body for adding a new activity to a day"""
     time: str = Field(..., description="Time of activity (e.g., '9:00 AM', 'Lunch', 'Evening')")
+    type: str = Field(..., description="Type of activity (e.g., 'Restaurant', 'Attraction', 'Nightlife', 'Sightseeing')")
     venue: str = Field(..., description="Name of the venue")
     address: str = Field(..., description="Address of the venue")
     price_display: str = Field(..., description="Price display (Free, $, $$, $$$, $$$$)")
@@ -182,6 +183,7 @@ class AddActivityRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "time": "3:00 PM",
+                "type": "Sightseeing",
                 "venue": "Art Deco Historic District",
                 "address": "Ocean Dr, Miami Beach, FL 33139",
                 "price_display": "Free",
