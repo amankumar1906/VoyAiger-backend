@@ -190,3 +190,48 @@ class AddActivityRequest(BaseModel):
                 "notes": "Walking tour of the historic Art Deco buildings"
             }
         }
+
+
+class SendInviteRequest(BaseModel):
+    """Request body for sending an itinerary invite"""
+    invitee_email: str = Field(
+        ...,
+        min_length=3,
+        max_length=255,
+        description="Email address of the person to invite"
+    )
+
+    @field_validator("invitee_email")
+    @classmethod
+    def validate_email(cls, v):
+        """Basic email validation"""
+        if "@" not in v or "." not in v:
+            raise ValueError("Invalid email format")
+        return v.lower().strip()
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "invitee_email": "friend@example.com"
+            }
+        }
+
+
+class RespondToInviteRequest(BaseModel):
+    """Request body for accepting or rejecting an invite"""
+    status: str = Field(..., description="Response status: 'accepted' or 'rejected'")
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v):
+        """Validate status is either accepted or rejected"""
+        if v not in ['accepted', 'rejected']:
+            raise ValueError("Status must be 'accepted' or 'rejected'")
+        return v
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": "accepted"
+            }
+        }

@@ -16,15 +16,15 @@ from pydantic import ValidationError as PydanticValidationError
 from typing import Dict, Any, Optional
 import logging
 from uuid import UUID
-from .schemas.request import GenerateItineraryRequest, SaveItineraryRequest, UpdateItineraryItemRequest, AddActivityRequest
-from .schemas.response import GenerateItineraryResponse, ErrorResponse, Itinerary
+from .schemas.request import GenerateItineraryRequest, SaveItineraryRequest, UpdateItineraryItemRequest, AddActivityRequest, SendInviteRequest, RespondToInviteRequest
+from .schemas.response import GenerateItineraryResponse, ErrorResponse, Itinerary, InviteResponse, InviteListResponse
 from .schemas.auth import UserRegisterRequest, UserLoginRequest, AuthResponse, UserResponse
 from .models.feedback import ItineraryFeedbackCreate, ItineraryFeedbackResponse
 from .agents.travel_agent import TravelAgent
 from .utils.content_safety import ContentSafetyError
 from .utils.rate_limiter import InMemoryRateLimiter
 from .utils.auth import hash_password, verify_password, create_access_token, get_token_expiry_seconds
-from .utils.database import create_user, get_user_by_email, get_user_by_id, create_itinerary, get_user_itineraries, get_itinerary_by_id, delete_itinerary, update_user_preferences, update_profile_image, create_or_update_feedback, get_feedback_by_itinerary, delete_feedback, update_itinerary_item, add_activity_to_day, delete_activity_from_day
+from .utils.database import create_user, get_user_by_email, get_user_by_id, create_itinerary, get_user_itineraries, get_all_accessible_itineraries, get_itinerary_by_id, get_itinerary_by_id_with_access, delete_itinerary, update_user_preferences, update_profile_image, create_or_update_feedback, get_feedback_by_itinerary, delete_feedback, update_itinerary_item, add_activity_to_day, delete_activity_from_day, send_invite, get_invite, get_itinerary_invites, get_user_pending_invites, respond_to_invite, has_itinerary_access, is_itinerary_owner
 from .middleware.security_headers import SecurityHeadersMiddleware
 from .middleware.timeout import CustomTimeoutMiddleware
 from .middleware.auth import require_auth
@@ -710,20 +710,20 @@ async def list_itineraries(
     limit: int = 50
 ):
     """
-    Get all saved itineraries for the authenticated user
+    Get all accessible itineraries for the authenticated user (owned + invited)
 
     Args:
         current_user: Authenticated user data from JWT token
         limit: Maximum number of itineraries to return (default: 50)
 
     Returns:
-        List of saved itineraries
+        List of accessible itineraries with role information
 
     Raises:
         HTTPException: If retrieval fails
     """
     try:
-        itineraries = await get_user_itineraries(current_user["id"], limit)
+        itineraries = await get_all_accessible_itineraries(current_user["id"], limit)
 
         return {
             "itineraries": itineraries,
@@ -755,7 +755,7 @@ async def get_itinerary(
     current_user: Dict[str, Any] = Depends(require_auth)
 ):
     """
-    Get a specific itinerary by ID (must belong to authenticated user)
+    Get a specific itinerary by ID (owner or accepted invitee)
 
     Args:
         itinerary_id: UUID of the itinerary
@@ -768,7 +768,7 @@ async def get_itinerary(
         HTTPException: If not found or unauthorized
     """
     try:
-        itinerary = await get_itinerary_by_id(itinerary_id, current_user["id"])
+        itinerary = await get_itinerary_by_id_with_access(itinerary_id, current_user["id"])
 
         if not itinerary:
             raise HTTPException(
@@ -1324,6 +1324,285 @@ async def remove_feedback(
             detail={
                 "error": "InternalServerError",
                 "message": "Failed to delete feedback",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+# ============================================
+# INVITE ENDPOINTS
+# ============================================
+
+@app.post(
+    "/itineraries/{itinerary_id}/invites",
+    response_model=InviteResponse,
+    responses={
+        201: {"description": "Invite sent successfully"},
+        400: {"model": ErrorResponse},
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def send_itinerary_invite(
+    itinerary_id: str,
+    request: SendInviteRequest,
+    current_user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Send an invite to collaborate on an itinerary
+    
+    Anyone with access (owner or accepted invitee) can send invites.
+    
+    Args:
+        itinerary_id: UUID of the itinerary
+        request: SendInviteRequest with invitee_email
+        current_user: Authenticated user data from JWT token
+    
+    Returns:
+        Created invite data
+    
+    Raises:
+        HTTPException: If not found, unauthorized, or invite creation fails
+    """
+    try:
+        # Check if user has access to this itinerary (owner or accepted invitee)
+        has_access = await has_itinerary_access(itinerary_id, current_user["id"])
+        if not has_access:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "NotFound",
+                    "message": "Itinerary not found or you don't have access to it",
+                    "details": {}
+                }
+            )
+        
+        # Prevent inviting yourself
+        if request.invitee_email.lower() == current_user["email"].lower():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "ValidationError",
+                    "message": "You cannot invite yourself",
+                    "details": {}
+                }
+            )
+        
+        # Send the invite
+        invite = await send_invite(
+            itinerary_id=itinerary_id,
+            invited_by_user_id=current_user["id"],
+            invitee_email=request.invitee_email
+        )
+        
+        return InviteResponse(**invite)
+    
+    except ValueError as e:
+        # Duplicate invite or validation error
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "ValidationError",
+                "message": str(e),
+                "details": {}
+            }
+        )
+    
+    except HTTPException:
+        raise
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to send invite",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+@app.get(
+    "/itineraries/{itinerary_id}/invites",
+    response_model=InviteListResponse,
+    responses={
+        200: {"description": "List of invites"},
+        401: {"model": ErrorResponse},
+        403: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def list_itinerary_invites(
+    itinerary_id: str,
+    current_user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Get all invites for an itinerary (owner only)
+    
+    Only the itinerary owner can see the full list of invites.
+    
+    Args:
+        itinerary_id: UUID of the itinerary
+        current_user: Authenticated user data from JWT token
+    
+    Returns:
+        List of invites with their statuses
+    
+    Raises:
+        HTTPException: If not found, unauthorized, or retrieval fails
+    """
+    try:
+        # Check if user is the owner
+        is_owner = await is_itinerary_owner(itinerary_id, current_user["id"])
+        if not is_owner:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Forbidden",
+                    "message": "Only the itinerary owner can view invites",
+                    "details": {}
+                }
+            )
+        
+        # Get all invites
+        invites = await get_itinerary_invites(itinerary_id, current_user["id"])
+        
+        return InviteListResponse(
+            invites=[InviteResponse(**invite) for invite in invites],
+            count=len(invites)
+        )
+    
+    except ValueError as e:
+        # Not the owner or itinerary not found
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "NotFound",
+                "message": str(e),
+                "details": {}
+            }
+        )
+    
+    except HTTPException:
+        raise
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to retrieve invites",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+@app.get(
+    "/invites/pending",
+    responses={
+        200: {"description": "List of pending invites"},
+        401: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def get_pending_invites(
+    current_user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Get all pending invites for the authenticated user
+    
+    Returns invites that are waiting for the user to accept or reject.
+    
+    Args:
+        current_user: Authenticated user data from JWT token
+    
+    Returns:
+        List of pending invites with itinerary details
+    
+    Raises:
+        HTTPException: If retrieval fails
+    """
+    try:
+        invites = await get_user_pending_invites(current_user["email"])
+        
+        return {
+            "invites": invites,
+            "count": len(invites)
+        }
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to retrieve pending invites",
+                "details": {"original_error": str(e)}
+            }
+        )
+
+
+@app.post(
+    "/invites/{invite_id}/respond",
+    response_model=InviteResponse,
+    responses={
+        200: {"description": "Invite response recorded"},
+        400: {"model": ErrorResponse},
+        401: {"model": ErrorResponse},
+        404: {"model": ErrorResponse},
+        500: {"model": ErrorResponse}
+    }
+)
+async def respond_to_itinerary_invite(
+    invite_id: str,
+    request: RespondToInviteRequest,
+    current_user: Dict[str, Any] = Depends(require_auth)
+):
+    """
+    Accept or reject an itinerary invite
+    
+    Args:
+        invite_id: UUID of the invite
+        request: RespondToInviteRequest with status ('accepted' or 'rejected')
+        current_user: Authenticated user data from JWT token
+    
+    Returns:
+        Updated invite data
+    
+    Raises:
+        HTTPException: If not found, already responded, or update fails
+    """
+    try:
+        invite = await respond_to_invite(
+            invite_id=invite_id,
+            user_id=current_user["id"],
+            user_email=current_user["email"],
+            status=request.status
+        )
+        
+        return InviteResponse(**invite)
+    
+    except ValueError as e:
+        # Invite not found, already responded, or invalid status
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "ValidationError",
+                "message": str(e),
+                "details": {}
+            }
+        )
+    
+    except HTTPException:
+        raise
+    
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "InternalServerError",
+                "message": "Failed to respond to invite",
                 "details": {"original_error": str(e)}
             }
         )

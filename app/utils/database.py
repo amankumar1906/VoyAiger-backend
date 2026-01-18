@@ -178,6 +178,33 @@ async def get_itinerary_by_id(itinerary_id: str, user_id: str) -> Optional[Dict[
     return None
 
 
+async def get_itinerary_by_id_with_access(itinerary_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Get a specific itinerary by ID if user has access (owner or accepted invitee)
+
+    Args:
+        itinerary_id: Itinerary UUID
+        user_id: User's UUID (for access verification)
+
+    Returns:
+        Itinerary data if found and user has access, None otherwise
+    """
+    # Check if user has access
+    if not await has_itinerary_access(itinerary_id, user_id):
+        return None
+
+    # Get the itinerary
+    client = SupabaseClient.get_client()
+    result = client.table('itineraries')\
+        .select('*')\
+        .eq('id', itinerary_id)\
+        .execute()
+
+    if result.data:
+        return result.data[0]
+    return None
+
+
 async def delete_itinerary(itinerary_id: str, user_id: str) -> bool:
     """
     Delete an itinerary (must belong to the user)
@@ -374,7 +401,7 @@ async def update_itinerary_item(
 
     Args:
         itinerary_id: UUID of the itinerary
-        user_id: UUID of the user (for ownership verification)
+        user_id: UUID of the user (for access verification - owner or invitee)
         day_number: Day number (1-indexed)
         activity_index: Index of the activity within the day (0-indexed)
         updated_item: Updated activity data (time, venue, address, etc.)
@@ -388,8 +415,8 @@ async def update_itinerary_item(
     """
     client = SupabaseClient.get_client()
 
-    # Get the existing itinerary
-    itinerary = await get_itinerary_by_id(itinerary_id, user_id)
+    # Get the existing itinerary (with access check)
+    itinerary = await get_itinerary_by_id_with_access(itinerary_id, user_id)
     if not itinerary:
         raise ValueError("Itinerary not found or you don't have access to it")
 
@@ -419,7 +446,6 @@ async def update_itinerary_item(
     result = client.table('itineraries')\
         .update({'itinerary_data': itinerary_data})\
         .eq('id', itinerary_id)\
-        .eq('user_id', user_id)\
         .execute()
 
     if result.data:
@@ -438,7 +464,7 @@ async def add_activity_to_day(
 
     Args:
         itinerary_id: UUID of the itinerary
-        user_id: UUID of the user (for ownership verification)
+        user_id: UUID of the user (for access verification - owner or invitee)
         day_number: Day number (1-indexed)
         new_activity: New activity data (time, venue, address, etc.)
 
@@ -451,8 +477,8 @@ async def add_activity_to_day(
     """
     client = SupabaseClient.get_client()
 
-    # Get the existing itinerary
-    itinerary = await get_itinerary_by_id(itinerary_id, user_id)
+    # Get the existing itinerary (with access check)
+    itinerary = await get_itinerary_by_id_with_access(itinerary_id, user_id)
     if not itinerary:
         raise ValueError("Itinerary not found or you don't have access to it")
 
@@ -478,7 +504,6 @@ async def add_activity_to_day(
     result = client.table('itineraries')\
         .update({'itinerary_data': itinerary_data})\
         .eq('id', itinerary_id)\
-        .eq('user_id', user_id)\
         .execute()
 
     if result.data:
@@ -497,7 +522,7 @@ async def delete_activity_from_day(
 
     Args:
         itinerary_id: UUID of the itinerary
-        user_id: UUID of the user (for ownership verification)
+        user_id: UUID of the user (for access verification - owner or invitee)
         day_number: Day number (1-indexed)
         activity_index: Index of the activity within the day (0-indexed)
 
@@ -510,8 +535,8 @@ async def delete_activity_from_day(
     """
     client = SupabaseClient.get_client()
 
-    # Get the existing itinerary
-    itinerary = await get_itinerary_by_id(itinerary_id, user_id)
+    # Get the existing itinerary (with access check)
+    itinerary = await get_itinerary_by_id_with_access(itinerary_id, user_id)
     if not itinerary:
         raise ValueError("Itinerary not found or you don't have access to it")
 
@@ -541,9 +566,295 @@ async def delete_activity_from_day(
     result = client.table('itineraries')\
         .update({'itinerary_data': itinerary_data})\
         .eq('id', itinerary_id)\
-        .eq('user_id', user_id)\
         .execute()
 
     if result.data:
         return result.data[0]
     raise Exception("Failed to delete activity from day")
+
+
+# Invite operations
+async def send_invite(
+    itinerary_id: str,
+    invited_by_user_id: str,
+    invitee_email: str
+) -> Dict[str, Any]:
+    """
+    Send an invite to collaborate on an itinerary
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        invited_by_user_id: UUID of the user sending the invite
+        invitee_email: Email address of the person being invited
+
+    Returns:
+        Created invite data
+
+    Raises:
+        ValueError: If invite already exists
+        Exception: If invite creation fails
+    """
+    client = SupabaseClient.get_client()
+
+    # Check if invite already exists
+    existing = client.table('itinerary_invites')\
+        .select('*')\
+        .eq('itinerary_id', itinerary_id)\
+        .eq('invitee_email', invitee_email)\
+        .execute()
+
+    if existing.data:
+        raise ValueError("Invite already exists for this email")
+
+    # Look up invitee user_id if they have an account
+    invitee_user = await get_user_by_email(invitee_email)
+    invitee_user_id = invitee_user['id'] if invitee_user else None
+
+    # Create the invite
+    result = client.table('itinerary_invites').insert({
+        'itinerary_id': itinerary_id,
+        'invited_by_user_id': invited_by_user_id,
+        'invitee_email': invitee_email,
+        'invitee_user_id': invitee_user_id,
+        'status': 'pending'
+    }).execute()
+
+    if not result.data:
+        raise Exception("Failed to create invite")
+
+    return result.data[0]
+
+
+async def get_invite(invite_id: str, user_email: str) -> Optional[Dict[str, Any]]:
+    """
+    Get a specific invite by ID (user must be the invitee)
+
+    Args:
+        invite_id: UUID of the invite
+        user_email: Email of the user (for verification)
+
+    Returns:
+        Invite data if found and belongs to user, None otherwise
+    """
+    client = SupabaseClient.get_client()
+    result = client.table('itinerary_invites')\
+        .select('*')\
+        .eq('id', invite_id)\
+        .eq('invitee_email', user_email)\
+        .execute()
+
+    if result.data:
+        return result.data[0]
+    return None
+
+
+async def get_itinerary_invites(itinerary_id: str, owner_user_id: str) -> List[Dict[str, Any]]:
+    """
+    Get all invites for an itinerary (owner only)
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        owner_user_id: UUID of the itinerary owner (for verification)
+
+    Returns:
+        List of invite data
+
+    Raises:
+        ValueError: If user is not the owner
+    """
+    client = SupabaseClient.get_client()
+
+    # Verify ownership
+    itinerary = await get_itinerary_by_id(itinerary_id, owner_user_id)
+    if not itinerary:
+        raise ValueError("Itinerary not found or you are not the owner")
+
+    # Get all invites
+    result = client.table('itinerary_invites')\
+        .select('*')\
+        .eq('itinerary_id', itinerary_id)\
+        .order('created_at', desc=True)\
+        .execute()
+
+    return result.data if result.data else []
+
+
+async def get_user_pending_invites(user_email: str) -> List[Dict[str, Any]]:
+    """
+    Get all pending invites for a user by email
+
+    Args:
+        user_email: Email address of the user
+
+    Returns:
+        List of pending invite data with itinerary details
+    """
+    client = SupabaseClient.get_client()
+
+    # Get pending invites with itinerary details
+    result = client.table('itinerary_invites')\
+        .select('*, itineraries(id, city, start_date, end_date, user_id, users(name, email))')\
+        .eq('invitee_email', user_email)\
+        .eq('status', 'pending')\
+        .order('created_at', desc=True)\
+        .execute()
+
+    return result.data if result.data else []
+
+
+async def respond_to_invite(
+    invite_id: str,
+    user_id: str,
+    user_email: str,
+    status: str
+) -> Dict[str, Any]:
+    """
+    Accept or reject an invite
+
+    Args:
+        invite_id: UUID of the invite
+        user_id: UUID of the user responding
+        user_email: Email of the user (for verification)
+        status: 'accepted' or 'rejected'
+
+    Returns:
+        Updated invite data
+
+    Raises:
+        ValueError: If invite not found, already responded, or invalid status
+        Exception: If update fails
+    """
+    if status not in ['accepted', 'rejected']:
+        raise ValueError("Status must be 'accepted' or 'rejected'")
+
+    client = SupabaseClient.get_client()
+
+    # Get the invite
+    invite = await get_invite(invite_id, user_email)
+    if not invite:
+        raise ValueError("Invite not found or you are not the invitee")
+
+    if invite['status'] != 'pending':
+        raise ValueError(f"Invite has already been {invite['status']}")
+
+    # Update the invite status and link to user account
+    result = client.table('itinerary_invites')\
+        .update({
+            'status': status,
+            'invitee_user_id': user_id
+        })\
+        .eq('id', invite_id)\
+        .eq('invitee_email', user_email)\
+        .execute()
+
+    if result.data:
+        return result.data[0]
+    raise Exception("Failed to respond to invite")
+
+
+async def has_itinerary_access(itinerary_id: str, user_id: str) -> bool:
+    """
+    Check if a user has access to an itinerary (owner or accepted invitee)
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        user_id: UUID of the user
+
+    Returns:
+        True if user has access, False otherwise
+    """
+    client = SupabaseClient.get_client()
+
+    # Check if user is the owner
+    owner_check = client.table('itineraries')\
+        .select('id')\
+        .eq('id', itinerary_id)\
+        .eq('user_id', user_id)\
+        .execute()
+
+    if owner_check.data:
+        return True
+
+    # Check if user has accepted invite
+    invite_check = client.table('itinerary_invites')\
+        .select('id')\
+        .eq('itinerary_id', itinerary_id)\
+        .eq('invitee_user_id', user_id)\
+        .eq('status', 'accepted')\
+        .execute()
+
+    return bool(invite_check.data)
+
+
+async def is_itinerary_owner(itinerary_id: str, user_id: str) -> bool:
+    """
+    Check if a user is the owner of an itinerary
+
+    Args:
+        itinerary_id: UUID of the itinerary
+        user_id: UUID of the user
+
+    Returns:
+        True if user is the owner, False otherwise
+    """
+    client = SupabaseClient.get_client()
+
+    result = client.table('itineraries')\
+        .select('id')\
+        .eq('id', itinerary_id)\
+        .eq('user_id', user_id)\
+        .execute()
+
+    return bool(result.data)
+
+
+async def get_all_accessible_itineraries(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    """
+    Get all itineraries accessible to a user (owned + accepted invites)
+
+    Args:
+        user_id: User's UUID
+        limit: Maximum number of itineraries to return
+
+    Returns:
+        List of itinerary data with access information
+    """
+    client = SupabaseClient.get_client()
+
+    # Get owned itineraries
+    owned = client.table('itineraries')\
+        .select('*, is_owner:user_id, role')\
+        .eq('user_id', user_id)\
+        .order('created_at', desc=True)\
+        .limit(limit)\
+        .execute()
+
+    owned_itineraries = owned.data if owned.data else []
+
+    # Add metadata for owned itineraries
+    for itin in owned_itineraries:
+        itin['is_owner'] = True
+        itin['role'] = 'owner'
+
+    # Get accepted invite itineraries
+    invites = client.table('itinerary_invites')\
+        .select('*, itineraries(*)')\
+        .eq('invitee_user_id', user_id)\
+        .eq('status', 'accepted')\
+        .order('created_at', desc=True)\
+        .execute()
+
+    invited_itineraries = []
+    if invites.data:
+        for invite in invites.data:
+            if invite.get('itineraries'):
+                itin = invite['itineraries']
+                itin['is_owner'] = False
+                itin['role'] = 'collaborator'
+                invited_itineraries.append(itin)
+
+    # Combine and sort by created_at
+    all_itineraries = owned_itineraries + invited_itineraries
+    all_itineraries.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+
+    return all_itineraries[:limit]

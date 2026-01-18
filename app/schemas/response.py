@@ -99,3 +99,21 @@ class ErrorResponse(BaseModel):
     error: str = Field(..., description="Error type")
     message: str = Field(..., description="Error message")
     details: Optional[dict] = Field(None, description="Additional error details")
+
+
+class InviteResponse(BaseModel):
+    """Response for invite operations"""
+    id: str = Field(..., description="Invite UUID")
+    itinerary_id: str = Field(..., description="Itinerary UUID")
+    invited_by_user_id: str = Field(..., description="UUID of user who sent invite")
+    invitee_email: str = Field(..., description="Email of invited user")
+    invitee_user_id: Optional[str] = Field(None, description="UUID of invited user (if they have account)")
+    status: str = Field(..., description="Invite status: pending, accepted, or rejected")
+    created_at: str = Field(..., description="When invite was created")
+    updated_at: str = Field(..., description="When invite was last updated")
+
+
+class InviteListResponse(BaseModel):
+    """Response for listing invites"""
+    invites: List[InviteResponse] = Field(..., description="List of invites")
+    count: int = Field(..., description="Total number of invites")
