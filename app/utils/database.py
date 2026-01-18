@@ -201,7 +201,10 @@ async def get_itinerary_by_id_with_access(itinerary_id: str, user_id: str) -> Op
         .execute()
 
     if result.data:
-        return result.data[0]
+        itinerary = result.data[0]
+        # Add is_owner metadata
+        itinerary['is_owner'] = itinerary.get('user_id') == user_id
+        return itinerary
     return None
 
 
