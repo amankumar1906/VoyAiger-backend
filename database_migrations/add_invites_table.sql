@@ -46,3 +46,40 @@ COMMENT ON TABLE public.itinerary_invites IS 'Stores invitations to collaborate 
 COMMENT ON COLUMN public.itinerary_invites.invitee_email IS 'Email of the invited user (may not have account yet)';
 COMMENT ON COLUMN public.itinerary_invites.invitee_user_id IS 'Linked to user account when they accept the invite';
 COMMENT ON COLUMN public.itinerary_invites.status IS 'Invitation status: pending, accepted, or rejected';
+
+-- ============================================
+-- CONCURRENCY CONTROL
+-- Add version tracking to itineraries table
+-- ============================================
+
+-- Add version column for optimistic locking
+ALTER TABLE public.itineraries
+ADD COLUMN IF NOT EXISTS version integer NOT NULL DEFAULT 1;
+
+-- Add last_modified_by to track who made the last edit
+ALTER TABLE public.itineraries
+ADD COLUMN IF NOT EXISTS last_modified_by uuid;
+
+-- Add foreign key constraint
+ALTER TABLE public.itineraries
+ADD CONSTRAINT itineraries_last_modified_by_fkey
+FOREIGN KEY (last_modified_by) REFERENCES public.users(id);
+
+-- Create trigger to auto-increment version on update
+CREATE OR REPLACE FUNCTION increment_itinerary_version()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.version = OLD.version + 1;
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+DROP TRIGGER IF EXISTS increment_version_on_update ON public.itineraries;
+CREATE TRIGGER increment_version_on_update
+    BEFORE UPDATE ON public.itineraries
+    FOR EACH ROW
+    EXECUTE FUNCTION increment_itinerary_version();
+
+COMMENT ON COLUMN public.itineraries.version IS 'Version number for optimistic locking (auto-increments on update)';
+COMMENT ON COLUMN public.itineraries.last_modified_by IS 'User ID of who last modified this itinerary';

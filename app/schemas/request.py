@@ -157,6 +157,7 @@ class UpdateItineraryItemRequest(BaseModel):
     address: Optional[str] = Field(None, description="Address of the venue")
     price_display: Optional[str] = Field(None, description="Price display (Free, $, $$, $$$, $$$$)")
     notes: Optional[str] = Field(None, description="Additional notes about the activity")
+    expected_version: Optional[int] = Field(None, description="Expected version number for optimistic locking")
 
     class Config:
         json_schema_extra = {
@@ -178,6 +179,7 @@ class AddActivityRequest(BaseModel):
     address: str = Field(..., description="Address of the venue")
     price_display: str = Field(..., description="Price display (Free, $, $$, $$$, $$$$)")
     notes: Optional[str] = Field(None, description="Additional notes about the activity")
+    expected_version: Optional[int] = Field(None, description="Expected version number for optimistic locking")
 
     class Config:
         json_schema_extra = {

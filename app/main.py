@@ -905,7 +905,8 @@ async def update_day_item(
             user_id=current_user["id"],
             day_number=day_number,
             activity_index=activity_index,
-            updated_item=updated_data
+            updated_item=updated_data,
+            expected_version=request.expected_version
         )
 
         return {
@@ -969,14 +970,15 @@ async def add_activity(
         HTTPException: If not found, unauthorized, or addition fails
     """
     try:
-        # Convert request to dict
-        new_activity = request.model_dump()
+        # Convert request to dict, excluding expected_version from activity data
+        new_activity = request.model_dump(exclude={'expected_version'})
 
         updated_itinerary = await add_activity_to_day(
             itinerary_id=itinerary_id,
             user_id=current_user["id"],
             day_number=day_number,
-            new_activity=new_activity
+            new_activity=new_activity,
+            expected_version=request.expected_version
         )
 
         return {
@@ -1021,7 +1023,8 @@ async def delete_activity(
     itinerary_id: str,
     day_number: int,
     activity_index: int,
-    current_user: Dict[str, Any] = Depends(require_auth)
+    current_user: Dict[str, Any] = Depends(require_auth),
+    expected_version: Optional[int] = None
 ):
     """
     Delete a specific activity from a day (must belong to authenticated user)
@@ -1043,7 +1046,8 @@ async def delete_activity(
             itinerary_id=itinerary_id,
             user_id=current_user["id"],
             day_number=day_number,
-            activity_index=activity_index
+            activity_index=activity_index,
+            expected_version=expected_version
         )
 
         return {

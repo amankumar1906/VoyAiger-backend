@@ -394,7 +394,8 @@ async def update_itinerary_item(
     user_id: str,
     day_number: int,
     activity_index: int,
-    updated_item: Dict[str, Any]
+    updated_item: Dict[str, Any],
+    expected_version: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Update a specific item within a day's activities
@@ -405,12 +406,13 @@ async def update_itinerary_item(
         day_number: Day number (1-indexed)
         activity_index: Index of the activity within the day (0-indexed)
         updated_item: Updated activity data (time, venue, address, etc.)
+        expected_version: Expected version number for optimistic locking (optional)
 
     Returns:
         Updated itinerary data
 
     Raises:
-        ValueError: If itinerary not found or day/activity doesn't exist
+        ValueError: If itinerary not found, day/activity doesn't exist, or version mismatch
         Exception: If update fails
     """
     client = SupabaseClient.get_client()
@@ -419,6 +421,10 @@ async def update_itinerary_item(
     itinerary = await get_itinerary_by_id_with_access(itinerary_id, user_id)
     if not itinerary:
         raise ValueError("Itinerary not found or you don't have access to it")
+
+    # Check version for concurrent edit detection
+    if expected_version is not None and itinerary.get('version') != expected_version:
+        raise ValueError(f"Conflict detected: Itinerary was modified by another user. Expected version {expected_version}, but current version is {itinerary.get('version')}")
 
     # Get the itinerary data
     itinerary_data = itinerary.get('itinerary_data', {})
@@ -442,22 +448,33 @@ async def update_itinerary_item(
     # Update the specific activity
     activities[activity_index].update(updated_item)
 
-    # Update the itinerary in the database
-    result = client.table('itineraries')\
-        .update({'itinerary_data': itinerary_data})\
-        .eq('id', itinerary_id)\
-        .execute()
+    # Update the itinerary in the database with version check
+    update_data = {
+        'itinerary_data': itinerary_data,
+        'last_modified_by': user_id
+    }
 
-    if result.data:
-        return result.data[0]
-    raise Exception("Failed to update itinerary item")
+    # If version check enabled, add it to the WHERE clause
+    query = client.table('itineraries').update(update_data).eq('id', itinerary_id)
+
+    if expected_version is not None:
+        query = query.eq('version', expected_version)
+
+    result = query.execute()
+
+    if not result.data:
+        # Could be version mismatch or other error
+        raise Exception("Failed to update itinerary item - possible concurrent modification")
+
+    return result.data[0]
 
 
 async def add_activity_to_day(
     itinerary_id: str,
     user_id: str,
     day_number: int,
-    new_activity: Dict[str, Any]
+    new_activity: Dict[str, Any],
+    expected_version: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Add a new activity to a specific day
@@ -467,12 +484,13 @@ async def add_activity_to_day(
         user_id: UUID of the user (for access verification - owner or invitee)
         day_number: Day number (1-indexed)
         new_activity: New activity data (time, venue, address, etc.)
+        expected_version: Expected version number for optimistic locking (optional)
 
     Returns:
         Updated itinerary data
 
     Raises:
-        ValueError: If itinerary not found or day doesn't exist
+        ValueError: If itinerary not found, day doesn't exist, or version mismatch
         Exception: If update fails
     """
     client = SupabaseClient.get_client()
@@ -481,6 +499,10 @@ async def add_activity_to_day(
     itinerary = await get_itinerary_by_id_with_access(itinerary_id, user_id)
     if not itinerary:
         raise ValueError("Itinerary not found or you don't have access to it")
+
+    # Check version for concurrent edit detection
+    if expected_version is not None and itinerary.get('version') != expected_version:
+        raise ValueError(f"Conflict detected: Itinerary was modified by another user. Expected version {expected_version}, but current version is {itinerary.get('version')}")
 
     # Get the itinerary data
     itinerary_data = itinerary.get('itinerary_data', {})
@@ -500,22 +522,31 @@ async def add_activity_to_day(
     activities = day_plan.get('activities', [])
     activities.append(new_activity)
 
-    # Update the itinerary in the database
-    result = client.table('itineraries')\
-        .update({'itinerary_data': itinerary_data})\
-        .eq('id', itinerary_id)\
-        .execute()
+    # Update the itinerary in the database with version check
+    update_data = {
+        'itinerary_data': itinerary_data,
+        'last_modified_by': user_id
+    }
 
-    if result.data:
-        return result.data[0]
-    raise Exception("Failed to add activity to day")
+    query = client.table('itineraries').update(update_data).eq('id', itinerary_id)
+
+    if expected_version is not None:
+        query = query.eq('version', expected_version)
+
+    result = query.execute()
+
+    if not result.data:
+        raise Exception("Failed to add activity to day - possible concurrent modification")
+
+    return result.data[0]
 
 
 async def delete_activity_from_day(
     itinerary_id: str,
     user_id: str,
     day_number: int,
-    activity_index: int
+    activity_index: int,
+    expected_version: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Delete a specific activity from a day
@@ -525,12 +556,13 @@ async def delete_activity_from_day(
         user_id: UUID of the user (for access verification - owner or invitee)
         day_number: Day number (1-indexed)
         activity_index: Index of the activity within the day (0-indexed)
+        expected_version: Expected version number for optimistic locking (optional)
 
     Returns:
         Updated itinerary data
 
     Raises:
-        ValueError: If itinerary not found or day/activity doesn't exist
+        ValueError: If itinerary not found, day/activity doesn't exist, or version mismatch
         Exception: If deletion fails
     """
     client = SupabaseClient.get_client()
@@ -539,6 +571,10 @@ async def delete_activity_from_day(
     itinerary = await get_itinerary_by_id_with_access(itinerary_id, user_id)
     if not itinerary:
         raise ValueError("Itinerary not found or you don't have access to it")
+
+    # Check version for concurrent edit detection
+    if expected_version is not None and itinerary.get('version') != expected_version:
+        raise ValueError(f"Conflict detected: Itinerary was modified by another user. Expected version {expected_version}, but current version is {itinerary.get('version')}")
 
     # Get the itinerary data
     itinerary_data = itinerary.get('itinerary_data', {})
@@ -562,15 +598,23 @@ async def delete_activity_from_day(
     # Delete the activity
     activities.pop(activity_index)
 
-    # Update the itinerary in the database
-    result = client.table('itineraries')\
-        .update({'itinerary_data': itinerary_data})\
-        .eq('id', itinerary_id)\
-        .execute()
+    # Update the itinerary in the database with version check
+    update_data = {
+        'itinerary_data': itinerary_data,
+        'last_modified_by': user_id
+    }
 
-    if result.data:
-        return result.data[0]
-    raise Exception("Failed to delete activity from day")
+    query = client.table('itineraries').update(update_data).eq('id', itinerary_id)
+
+    if expected_version is not None:
+        query = query.eq('version', expected_version)
+
+    result = query.execute()
+
+    if not result.data:
+        raise Exception("Failed to delete activity from day - possible concurrent modification")
+
+    return result.data[0]
 
 
 # Invite operations
