@@ -26,9 +26,17 @@ async def get_current_user(request: Request, access_token: Optional[str] = Cooki
     user_agent = request.headers.get("user-agent", "unknown")
     origin = request.headers.get("origin", "unknown")
     cookie_header = request.headers.get("cookie", "")
+    referer = request.headers.get("referer", "unknown")
 
-    logger.info(f"Auth attempt - Path: {request.url.path}, Origin: {origin}, User-Agent: {user_agent[:50]}")
+    logger.info(f"Auth attempt - Path: {request.url.path}, Origin: {origin}, Referer: {referer}")
+    logger.info(f"User-Agent: {user_agent}")
     logger.info(f"Cookie header present: {bool(cookie_header)}, Access token from cookie: {bool(access_token)}")
+    if cookie_header:
+        # Log cookie names (not values for security)
+        cookie_names = [c.split('=')[0].strip() for c in cookie_header.split(';')]
+        logger.info(f"Cookies received: {cookie_names}")
+    else:
+        logger.warning(f"NO COOKIES RECEIVED - This is the mobile Chrome bug!")
 
     # If no cookie, check Authorization header as fallback (for backward compatibility during migration)
     if not access_token:
