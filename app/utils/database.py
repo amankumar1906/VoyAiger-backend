@@ -736,14 +736,27 @@ async def get_user_pending_invites(user_email: str) -> List[Dict[str, Any]]:
     client = SupabaseClient.get_client()
 
     # Get pending invites with itinerary details
+    # Note: Using itineraries(*) to get all itinerary fields
     result = client.table('itinerary_invites')\
-        .select('*, itineraries(id, city, start_date, end_date, user_id, users(name, email))')\
+        .select('*, itineraries(*)')\
         .eq('invitee_email', user_email)\
         .eq('status', 'pending')\
         .order('created_at', desc=True)\
         .execute()
 
-    return result.data if result.data else []
+    invites = result.data if result.data else []
+
+    # Fetch user details for each itinerary owner
+    for invite in invites:
+        if invite.get('itineraries') and invite['itineraries'].get('user_id'):
+            user = await get_user_by_id(invite['itineraries']['user_id'])
+            if user:
+                invite['itineraries']['users'] = {
+                    'name': user['name'],
+                    'email': user['email']
+                }
+
+    return invites
 
 
 async def respond_to_invite(
