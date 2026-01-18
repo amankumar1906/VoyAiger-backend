@@ -92,7 +92,7 @@ async def health():
 
 @app.post(
     "/auth/register",
-    response_model=UserResponse,
+    response_model=AuthResponse,
     responses={
         400: {"model": ErrorResponse},
         500: {"model": ErrorResponse}
@@ -143,13 +143,19 @@ async def register(request: UserRegisterRequest, response: Response):
         )
         logger.info(f"Cookie set in response headers for {user_data['email']}")
 
-        return UserResponse(
-            id=user_data["id"],
-            name=user_data["name"],
-            email=user_data["email"],
-            created_at=user_data["created_at"],
-            preferences=user_data.get("preferences", []),
-            profile_image_url=user_data.get("profile_image_url")
+        # Return token in response body as well (for mobile browsers that block cookies)
+        return AuthResponse(
+            access_token=access_token,
+            token_type="bearer",
+            expires_in=get_token_expiry_seconds(),
+            user=UserResponse(
+                id=user_data["id"],
+                name=user_data["name"],
+                email=user_data["email"],
+                created_at=user_data["created_at"],
+                preferences=user_data.get("preferences", []),
+                profile_image_url=user_data.get("profile_image_url")
+            )
         )
 
     except ValueError as e:
@@ -177,7 +183,7 @@ async def register(request: UserRegisterRequest, response: Response):
 
 @app.post(
     "/auth/login",
-    response_model=UserResponse,
+    response_model=AuthResponse,
     responses={
         401: {"model": ErrorResponse},
         500: {"model": ErrorResponse}
@@ -242,13 +248,19 @@ async def login(request: UserLoginRequest, response: Response):
         )
         logger.info(f"Cookie set in response headers for {user_data['email']}")
 
-        return UserResponse(
-            id=user_data["id"],
-            name=user_data["name"],
-            email=user_data["email"],
-            created_at=user_data["created_at"],
-            preferences=user_data.get("preferences", []),
-            profile_image_url=user_data.get("profile_image_url")
+        # Return token in response body as well (for mobile browsers that block cookies)
+        return AuthResponse(
+            access_token=access_token,
+            token_type="bearer",
+            expires_in=get_token_expiry_seconds(),
+            user=UserResponse(
+                id=user_data["id"],
+                name=user_data["name"],
+                email=user_data["email"],
+                created_at=user_data["created_at"],
+                preferences=user_data.get("preferences", []),
+                profile_image_url=user_data.get("profile_image_url")
+            )
         )
 
     except HTTPException:
