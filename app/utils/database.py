@@ -867,7 +867,7 @@ async def get_all_accessible_itineraries(user_id: str, limit: int = 50) -> List[
 
     # Get owned itineraries
     owned = client.table('itineraries')\
-        .select('*, is_owner:user_id, role')\
+        .select('*')\
         .eq('user_id', user_id)\
         .order('created_at', desc=True)\
         .limit(limit)\
