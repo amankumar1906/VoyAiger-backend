@@ -19,13 +19,26 @@ async def get_current_user(request: Request, access_token: Optional[str] = Cooki
     Raises:
         HTTPException: If token is missing, invalid, or user not found
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
+    # Log authentication attempt with request details
+    user_agent = request.headers.get("user-agent", "unknown")
+    origin = request.headers.get("origin", "unknown")
+    cookie_header = request.headers.get("cookie", "")
+
+    logger.info(f"Auth attempt - Path: {request.url.path}, Origin: {origin}, User-Agent: {user_agent[:50]}")
+    logger.info(f"Cookie header present: {bool(cookie_header)}, Access token from cookie: {bool(access_token)}")
+
     # If no cookie, check Authorization header as fallback (for backward compatibility during migration)
     if not access_token:
         auth_header = request.headers.get("authorization")
         if auth_header and auth_header.startswith("Bearer "):
             access_token = auth_header.split(" ")[1]
+            logger.info("Using token from Authorization header as fallback")
 
     if not access_token:
+        logger.warning(f"Missing authentication token - Path: {request.url.path}, Origin: {origin}")
         raise HTTPException(
             status_code=401,
             detail={
@@ -39,6 +52,7 @@ async def get_current_user(request: Request, access_token: Optional[str] = Cooki
     # Decode and verify token
     payload = decode_access_token(access_token)
     if not payload:
+        logger.warning(f"Invalid or expired token - Path: {request.url.path}, Origin: {origin}")
         raise HTTPException(
             status_code=401,
             detail={
@@ -52,6 +66,7 @@ async def get_current_user(request: Request, access_token: Optional[str] = Cooki
     # Get user from database
     user_id = payload.get("sub")
     if not user_id:
+        logger.warning(f"Invalid token payload (missing sub) - Path: {request.url.path}")
         raise HTTPException(
             status_code=401,
             detail={
@@ -64,6 +79,7 @@ async def get_current_user(request: Request, access_token: Optional[str] = Cooki
 
     user = await get_user_by_id(user_id)
     if not user:
+        logger.warning(f"User not found for ID: {user_id} - Path: {request.url.path}")
         raise HTTPException(
             status_code=401,
             detail={
@@ -74,6 +90,7 @@ async def get_current_user(request: Request, access_token: Optional[str] = Cooki
             headers={"WWW-Authenticate": "Bearer"}
         )
 
+    logger.info(f"Authentication successful for user {user.get('email', 'unknown')} - Path: {request.url.path}")
     return user
 
 

@@ -129,12 +129,15 @@ async def register(request: UserRegisterRequest, response: Response):
         )
 
         # Set token in HttpOnly cookie
+        # Always use secure=True and samesite="none" for cross-origin requests
+        # This is required for mobile browsers to accept cookies
+        logger.info(f"Setting authentication cookie for user {user_data['email']} (secure=True, samesite=none)")
         response.set_cookie(
             key="access_token",
             value=access_token,
             httponly=True,
-            secure=settings.env == "production",  # HTTPS only in production
-            samesite="none" if settings.env == "production" else "lax",  # None for cross-site in production
+            secure=True,  # Required for SameSite=None
+            samesite="none",  # Allow cross-site cookies
             max_age=get_token_expiry_seconds()
         )
 
@@ -223,12 +226,15 @@ async def login(request: UserLoginRequest, response: Response):
         )
 
         # Set token in HttpOnly cookie
+        # Always use secure=True and samesite="none" for cross-origin requests
+        # This is required for mobile browsers to accept cookies
+        logger.info(f"Setting authentication cookie for user {user_data['email']} (secure=True, samesite=none)")
         response.set_cookie(
             key="access_token",
             value=access_token,
             httponly=True,
-            secure=settings.env == "production",  # HTTPS only in production
-            samesite="none" if settings.env == "production" else "lax",  # None for cross-site in production
+            secure=True,  # Required for SameSite=None
+            samesite="none",  # Allow cross-site cookies
             max_age=get_token_expiry_seconds()
         )
 
